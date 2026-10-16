@@ -71,9 +71,9 @@ class SoundCloudApiClient {
                 // search that returns hits simply means no candidate was usable, and
                 // re-running it would only burn time and bandwidth.
                 repeat(2) { attempt ->
-                    val clientId = clientId() ?: return@withContext null
+                    val key = clientId() ?: return@withContext null
 
-                    val candidates = searchTracks(track, clientId)
+                    val candidates = searchTracks(track, key)
                     if (candidates.isEmpty() && attempt == 0) {
                         // httpGet already dropped a 401/403 key, so this re-scrapes it.
                         cachedClientId = null
@@ -81,7 +81,7 @@ class SoundCloudApiClient {
                     }
 
                     for (candidate in candidates.take(MAX_CANDIDATES)) {
-                        val stream = resolveTranscoding(candidate, clientId, allowHls) ?: continue
+                        val stream = resolveTranscoding(candidate, key, allowHls) ?: continue
                         if (verify(stream)) {
                             Log.i(
                                 TAG,

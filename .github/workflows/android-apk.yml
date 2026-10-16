@@ -52,7 +52,30 @@ jobs:
         run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: |
+          set +e
+          gradle assembleDebug --stacktrace > build.log 2>&1
+          STATUS=$?
+          echo "===== COMPILE / GRADLE ERRORS ====="
+          grep -E "^e: |e: file|error:|What went wrong|Execution failed for task|Caused by: " build.log | head -40 || true
+          echo "===== TAIL ====="
+          tail -n 45 build.log
+          exit $STATUS
+
+      # GitHub does not expose Actions step logs to unauthenticated API clients, but it
+      # DOES expose check-run annotations. Re-emit the compiler errors as ::error:: lines so
+      # the exact failure can be read back with
+      # GET /repos/{owner}/{repo}/check-runs/{job_id}/annotations
+      - name: Publish build errors
+        if: failure()
+        run: |
+          if [ -f build.log ]; then
+            grep -E "^e: |e: file|error:|What went wrong|Execution failed for task|Caused by: " build.log \
+              | head -15 \
+              | while IFS= read -r line; do
+                  echo "::error::${line//$'\n'/ }"
+                done
+          fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
