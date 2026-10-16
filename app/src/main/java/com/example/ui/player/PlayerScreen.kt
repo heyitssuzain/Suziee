@@ -899,25 +899,14 @@ private fun SyncedLyrics(
     val activeIndex = lines.indexOfLast { it.timeMs <= currentPositionMs }.coerceAtLeast(0)
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        // Half the viewport as vertical padding lets the active line sit dead centre,
-        // with finished lines above and upcoming ones below.
+        // Half the panel as vertical padding, minus half a line, so that bringing the active
+        // line to the top of the *content* area lands it dead centre - with finished lines
+        // above and upcoming ones below.
         val verticalPadding = maxOf(24.dp, (maxHeight / 2) - 30.dp)
 
         LaunchedEffect(activeIndex, lines.size) {
-            if (activeIndex !in lines.indices) return@LaunchedEffect
-            listState.animateScrollToItem(activeIndex)
-
-            // Measurement based centring: correct for any line height, font scale or
-            // density, and a no-op when the padding already lined it up.
-            val info = listState.layoutInfo
-            val item = info.visibleItemsInfo.firstOrNull { it.index == activeIndex }
-            if (item != null) {
-                val viewportCentre = (info.viewportStartOffset + info.viewportEndOffset) / 2f
-                val itemCentre = item.offset + item.size / 2f
-                val delta = itemCentre - viewportCentre
-                if (abs(delta) > 2f) {
-                    listState.animateScrollBy(delta, tween(420, easing = FastOutSlowInEasing))
-                }
+            if (activeIndex in lines.indices) {
+                listState.animateScrollToItem(activeIndex)
             }
         }
 

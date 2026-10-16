@@ -255,8 +255,8 @@ class DownloadManager(
                 status = status,
                 progressPercent = progress ?: existing?.progressPercent ?: 0,
                 errorMessage = error ?: if (status == "DOWNLOADING" || status == "COMPLETED") null else existing?.errorMessage,
-                totalBytes = totalBytes ?: existing?.totalBytes,
-                downloadedBytes = downloadedBytes ?: existing?.downloadedBytes,
+                totalBytes = totalBytes ?: existing?.totalBytes ?: 0L,
+                downloadedBytes = downloadedBytes ?: existing?.downloadedBytes ?: 0L,
                 localFilePath = localFilePath ?: existing?.localFilePath
             )
         )
