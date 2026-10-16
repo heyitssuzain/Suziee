@@ -290,14 +290,31 @@ class MusicPlayerManager(
             if (exoPlayer.isPlaying) {
                 exoPlayer.pause()
             } else {
-                if (exoPlayer.playbackState == Player.STATE_ENDED) {
+                val state = exoPlayer.playbackState
+                if (state == Player.STATE_ENDED) {
                     exoPlayer.seekTo(0)
+                } else if (state == Player.STATE_IDLE && exoPlayer.mediaItemCount > 0) {
+                    // The player errored or was stopped - it needs a fresh prepare().
+                    exoPlayer.prepare()
                 }
                 exoPlayer.playWhenReady = true
             }
         } catch (e: Exception) {
             Log.e(TAG, "togglePlayPause failed: ${e.message}", e)
         }
+    }
+
+    /** Re-resolves and restarts the current track (used by the error "Retry" button). */
+    fun retryCurrent() {
+        val track = _playbackState.value.currentTrack ?: return
+        try {
+            exoPlayer.stop()
+            exoPlayer.clearMediaItems()
+        } catch (e: Exception) {
+            Log.w(TAG, "retry: reset failed: ${e.message}")
+        }
+        _playbackState.update { it.copy(errorMessage = null, isLoading = true) }
+        resolveAndStartPlayback(track)
     }
 
     fun playNext() {

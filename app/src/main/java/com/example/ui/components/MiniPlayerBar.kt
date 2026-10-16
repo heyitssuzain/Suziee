@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -49,6 +50,7 @@ fun MiniPlayerBar(
     onExpandPlayer: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
+    onRetry: () -> Unit = onTogglePlayPause,
     modifier: Modifier = Modifier
 ) {
     val track = state.currentTrack ?: return
@@ -143,12 +145,20 @@ fun MiniPlayerBar(
                     )
                 } else {
                     IconButton(
-                        onClick = onTogglePlayPause,
+                        onClick = { if (state.errorMessage != null) onRetry() else onTogglePlayPause() },
                         modifier = Modifier.testTag("mini_play_pause_button")
                     ) {
                         Icon(
-                            imageVector = if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (state.isPlaying) "Pause" else "Play",
+                            imageVector = when {
+                                state.errorMessage != null -> Icons.Default.Refresh
+                                state.isPlaying -> Icons.Default.Pause
+                                else -> Icons.Default.PlayArrow
+                            },
+                            contentDescription = when {
+                                state.errorMessage != null -> "Retry"
+                                state.isPlaying -> "Pause"
+                                else -> "Play"
+                            },
                             tint = SuzieeAccentSecondary,
                             modifier = Modifier.size(28.dp)
                         )

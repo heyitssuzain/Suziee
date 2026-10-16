@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
@@ -460,7 +461,13 @@ fun PlayerScreen(
                         .background(
                             Brush.linearGradient(listOf(SuzieeAccentPrimary, SuzieeAccentSecondary))
                         )
-                        .clickable { playerManager.togglePlayPause() }
+                        .clickable {
+                            if (playbackState.errorMessage != null) {
+                                playerManager.retryCurrent()
+                            } else {
+                                playerManager.togglePlayPause()
+                            }
+                        }
                         .testTag("player_play_pause_button"),
                     contentAlignment = Alignment.Center
                 ) {
@@ -469,6 +476,13 @@ fun PlayerScreen(
                             color = SuzieeBgPrimary,
                             strokeWidth = 3.dp,
                             modifier = Modifier.size(32.dp)
+                        )
+                    } else if (playbackState.errorMessage != null) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Retry",
+                            tint = SuzieeBgPrimary,
+                            modifier = Modifier.size(34.dp)
                         )
                     } else {
                         Icon(
@@ -504,6 +518,18 @@ fun PlayerScreen(
                         tint = if (playbackState.repeatMode != PlaybackRepeatMode.OFF) SuzieeAccentSecondary else SuzieeTextMuted
                     )
                 }
+            }
+
+            playbackState.errorMessage?.let { message ->
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .testTag("player_error_message")
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))

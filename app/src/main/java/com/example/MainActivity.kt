@@ -191,7 +191,8 @@ fun SuzieeApp(
                         state = playbackState,
                         onExpandPlayer = { showPlayerFullScreen = true },
                         onTogglePlayPause = { playerManager.togglePlayPause() },
-                        onSkipNext = { playerManager.playNext() }
+                        onSkipNext = { playerManager.playNext() },
+                        onRetry = { playerManager.retryCurrent() }
                     )
                 }
 
