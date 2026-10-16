@@ -18,11 +18,14 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
 import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
 import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.repository.MusicRepository
+import com.example.domain.model.StreamInfo
 import com.example.domain.model.Track
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,6 +42,23 @@ import kotlin.random.Random
 
 enum class RepeatMode {
     OFF, ALL, ONE
+}
+
+/**
+ * Which provider actually supplied the stream currently loaded into ExoPlayer.
+ * Used to decide whether a playback failure is worth retrying against the fallback.
+ */
+private enum class StreamSource {
+    NONE,
+
+    /** Captured by the headless WebView sniffer (primary). */
+    YOUTUBE_SNIFFER,
+
+    /** Resolved through the SoundCloud public API (fallback). */
+    SOUNDCLOUD,
+
+    /** A local, already-downloaded file. */
+    LOCAL
 }
 
 data class PlaybackState(
@@ -65,26 +85,54 @@ class MusicPlayerManager(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     /**
-     * Media requests (googlevideo.com and friends) require a matching User-Agent and
-     * a YouTube Referer, otherwise the CDN answers 403 Forbidden. These default
-     * request properties are applied to every stream ExoPlayer fetches.
+     * Default media HTTP headers.
+     *
+     * Media CDNs are picky: googlevideo answers 403 without a matching User-Agent and a
+     * YouTube Referer. These are the baseline applied to every stream; a resolved
+     * [StreamInfo] can add or override entries (e.g. the browser session Cookie the
+     * WebView sniffer captured, or a SoundCloud Referer).
      */
+    private val baseMediaHeaders = mapOf(
+        "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
+        "Referer" to "https://www.youtube.com/",
+        "Origin" to "https://www.youtube.com",
+        "Accept-Language" to "en-US,en;q=0.9"
+    )
+
     private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
         .setUserAgent(InnerTubeApiClient.MEDIA_USER_AGENT)
         .setConnectTimeoutMs(15_000)
         .setReadTimeoutMs(20_000)
         .setAllowCrossProtocolRedirects(true)
-        .setDefaultRequestProperties(
-            mapOf(
-                "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
-                "Referer" to "https://www.youtube.com/",
-                "Origin" to "https://www.youtube.com",
-                "Accept-Language" to "en-US,en;q=0.9"
-            )
-        )
+        .setDefaultRequestProperties(baseMediaHeaders)
 
     private val dataSourceFactory: DataSource.Factory =
         DefaultDataSource.Factory(context, httpDataSourceFactory)
+
+    /**
+     * Builds a [MediaSource] for one stream.
+     *
+     * When the stream needs extra headers we build a dedicated data-source factory just
+     * for it, so the per-stream Cookie/Referer cannot leak into other tracks. Without
+     * extra headers we reuse the shared factory (the common, zero-cost path).
+     */
+    private fun buildMediaSource(mediaItem: MediaItem, headers: Map<String, String>): MediaSource {
+        if (headers.isEmpty()) {
+            return DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(mediaItem)
+        }
+
+        val perStreamHttpFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent(headers["User-Agent"] ?: InnerTubeApiClient.MEDIA_USER_AGENT)
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(20_000)
+            .setAllowCrossProtocolRedirects(true)
+            .setDefaultRequestProperties(baseMediaHeaders + headers)
+
+        val perStreamFactory: DataSource.Factory =
+            DefaultDataSource.Factory(context, perStreamHttpFactory)
+
+        return DefaultMediaSourceFactory(perStreamFactory).createMediaSource(mediaItem)
+    }
 
     val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
         .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
@@ -114,6 +162,15 @@ class MusicPlayerManager(
     private var progressTrackerJob: Job? = null
     private var originalQueue: List<Track> = emptyList()
     private var serviceStarted = false
+
+    /** The in-flight resolve/sniff job. Cancelled when the user picks another track. */
+    private var resolveJob: Job? = null
+
+    /** Where the currently loaded stream came from (drives the error failover). */
+    private var currentSource: StreamSource = StreamSource.NONE
+
+    /** Guards the SoundCloud failover so we only escalate once per track. */
+    private var soundCloudTriedForCurrentTrack = false
 
     init {
         exoPlayer.addListener(object : Player.Listener {
@@ -152,6 +209,23 @@ class MusicPlayerManager(
 
             override fun onPlayerError(error: PlaybackException) {
                 Log.e(TAG, "ExoPlayer error: ${error.message}", error)
+
+                val track = _playbackState.value.currentTrack
+
+                // Failover trigger #2 from the spec ("persistent playback error"):
+                // a sniffed YouTube URL can go stale - signatures expire and SABR chunks
+                // end mid-stream. Rather than dead-ending on an error, silently re-resolve
+                // this one track through SoundCloud. Guarded so we only escalate once.
+                if (track != null &&
+                    currentSource == StreamSource.YOUTUBE_SNIFFER &&
+                    !soundCloudTriedForCurrentTrack
+                ) {
+                    Log.w(TAG, "YouTube stream failed mid-playback - switching to SoundCloud fallback")
+                    soundCloudTriedForCurrentTrack = true
+                    failoverToSoundCloud(track)
+                    return
+                }
+
                 _playbackState.update {
                     it.copy(
                         isLoading = false,
@@ -209,8 +283,29 @@ class MusicPlayerManager(
         resolveAndStartPlayback(track)
     }
 
+    /**
+     * Resolves [track] and starts playback, using the block-resistant dual-source
+     * architecture:
+     *
+     *  1. **Local file** - if the track has been downloaded, just play it.
+     *  2. **PRIMARY - headless WebView sniffer**: a real, invisible YouTube browser
+     *     session. It is the only thing that can produce a working (n-transformed)
+     *     googlevideo URL, because YouTube's `n` challenge must be solved by their own JS.
+     *  3. **FALLBACK - SoundCloud public API**: used automatically when the sniffer does
+     *     not capture a stream inside `YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS` (5s).
+     *
+     * The custom native UI is untouched by all of this: it simply observes
+     * [PlaybackState.isLoading], which stays true from the moment a song is tapped until
+     * ExoPlayer reports STATE_READY/STATE_BUFFERING is over.
+     */
     private fun resolveAndStartPlayback(track: Track) {
-        scope.launch {
+        // A new selection always wins: drop whatever the previous track was doing
+        // (including a WebView that may still be sniffing) and reset the failover guard.
+        resolveJob?.cancel()
+        soundCloudTriedForCurrentTrack = false
+        currentSource = StreamSource.NONE
+
+        resolveJob = scope.launch {
             try {
                 _playbackState.update { it.copy(isLoading = true, errorMessage = null) }
 
@@ -218,60 +313,36 @@ class MusicPlayerManager(
                 runCatching { repository.recordPlayed(track) }
                     .onFailure { Log.w(TAG, "Failed to record play history: ${it.message}") }
 
-                // Resolve either a local file or a remote stream.
+                // 1. Local, already-downloaded track.
                 val localFile = track.localFilePath
                     ?.takeIf { track.isDownloaded && !it.isNullOrBlank() }
                     ?.let { File(it) }
                     ?.takeIf { it.exists() }
 
-                val mediaUri: Uri
-                val mimeType: String?
-
                 if (localFile != null) {
                     Log.i(TAG, "Playing local offline track: ${localFile.absolutePath}")
-                    mediaUri = Uri.fromFile(localFile)
-                    mimeType = null
-                } else {
-                    val streamResult = repository.resolveStreamUrl(track)
-                    val streamInfo = streamResult.getOrNull()
-                    if (streamInfo == null) {
-                        val reason = streamResult.exceptionOrNull()?.message ?: "Unknown error"
-                        Log.e(TAG, "Failed stream resolution: $reason")
-                        _playbackState.update {
-                            it.copy(
-                                isLoading = false,
-                                isPlaying = false,
-                                errorMessage = "Couldn't play this track. Tap retry or pick another song."
-                            )
-                        }
-                        return@launch
+                    currentSource = StreamSource.LOCAL
+                    startPlayback(StreamInfo(url = Uri.fromFile(localFile).toString()), track)
+                    return@launch
+                }
+
+                // 2. + 3. Remote: sniffer first, SoundCloud fallback second.
+                val streamInfo = resolveRemoteStream(track, useSniffer = true)
+                if (streamInfo == null) {
+                    Log.e(TAG, "Both sources failed for ${track.title}")
+                    _playbackState.update {
+                        it.copy(
+                            isLoading = false,
+                            isPlaying = false,
+                            errorMessage = "Couldn't play this track. Tap retry or pick another song."
+                        )
                     }
-                    Log.i(TAG, "Playing resolved stream: ${streamInfo.url.take(80)}...")
-                    mediaUri = Uri.parse(streamInfo.url)
-                    mimeType = streamInfo.mimeType
+                    return@launch
                 }
 
-                val mediaMetadata = MediaMetadata.Builder()
-                    .setTitle(track.title)
-                    .setArtist(track.artist)
-                    .setArtworkUri(if (track.artworkUrl.isNotBlank()) Uri.parse(track.artworkUrl) else null)
-                    .build()
-
-                val mediaItemBuilder = MediaItem.Builder()
-                    .setUri(mediaUri)
-                    .setMediaId(track.id)
-                    .setMediaMetadata(mediaMetadata)
-
-                if (!mimeType.isNullOrBlank()) {
-                    mediaItemBuilder.setMimeType(mimeType)
-                }
-
-                // Make sure the media session service is running before we start.
-                ensurePlaybackServiceStarted()
-
-                exoPlayer.setMediaItem(mediaItemBuilder.build())
-                exoPlayer.prepare()
-                exoPlayer.playWhenReady = true
+                startPlayback(streamInfo, track)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Playback start failed: ${e.message}", e)
                 _playbackState.update {
@@ -284,6 +355,109 @@ class MusicPlayerManager(
             }
         }
     }
+
+    /**
+     * Tries the two remote sources in order and remembers which one won.
+     *
+     * @param useSniffer false to skip straight to SoundCloud (used by the failover).
+     */
+    private suspend fun resolveRemoteStream(track: Track, useSniffer: Boolean): StreamInfo? {
+        if (useSniffer && looksLikeYouTubeVideoId(track.id)) {
+            Log.i(TAG, "PRIMARY: sniffing YouTube via headless WebView (${track.id})")
+            val sniffed = YouTubeWebViewSniffer(context).sniff(track.id)
+            if (sniffed != null) {
+                currentSource = StreamSource.YOUTUBE_SNIFFER
+                Log.i(TAG, "Sniffer captured a ${sniffed.mimeType ?: "media"} stream")
+                return sniffed
+            }
+            Log.w(
+                TAG,
+                "Sniffer timed out after ${YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS}ms - " +
+                    "FALLBACK: SoundCloud"
+            )
+        }
+
+        val soundCloud = repository.resolveStreamUrl(track).getOrNull()
+        if (soundCloud != null && soundCloud.url.isNotBlank()) {
+            currentSource = StreamSource.SOUNDCLOUD
+            Log.i(TAG, "FALLBACK: playing SoundCloud stream")
+            return soundCloud
+        }
+
+        return null
+    }
+
+    /**
+     * Re-resolves the current track through SoundCloud only. Called when a sniffed
+     * YouTube stream dies mid-playback (expired signature / truncated SABR chunk).
+     */
+    private fun failoverToSoundCloud(track: Track) {
+        resolveJob?.cancel()
+        resolveJob = scope.launch {
+            try {
+                _playbackState.update { it.copy(isLoading = true, errorMessage = null) }
+
+                val streamInfo = resolveRemoteStream(track, useSniffer = false)
+                if (streamInfo == null) {
+                    _playbackState.update {
+                        it.copy(
+                            isLoading = false,
+                            isPlaying = false,
+                            errorMessage = "Couldn't play this track. Tap retry or pick another song."
+                        )
+                    }
+                    return@launch
+                }
+
+                startPlayback(streamInfo, track)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "SoundCloud failover failed: ${e.message}", e)
+                _playbackState.update {
+                    it.copy(
+                        isLoading = false,
+                        isPlaying = false,
+                        errorMessage = "Playback failed: ${e.localizedMessage ?: "Unknown error"}"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Hands a resolved stream to ExoPlayer natively (background audio, MediaSession
+     * notification, Bluetooth controls - the WebView is fully out of the picture here).
+     */
+    private fun startPlayback(streamInfo: StreamInfo, track: Track) {
+        val mediaMetadata = MediaMetadata.Builder()
+            .setTitle(track.title)
+            .setArtist(track.artist)
+            .setArtworkUri(if (track.artworkUrl.isNotBlank()) Uri.parse(track.artworkUrl) else null)
+            .build()
+
+        val mediaItemBuilder = MediaItem.Builder()
+            .setUri(Uri.parse(streamInfo.url))
+            .setMediaId(track.id)
+            .setMediaMetadata(mediaMetadata)
+
+        // The mime hint matters for extension-less CDN URLs (".../videoplayback?...")
+        // and for the SoundCloud HLS playlist.
+        if (!streamInfo.mimeType.isNullOrBlank()) {
+            mediaItemBuilder.setMimeType(streamInfo.mimeType)
+        }
+
+        // Make sure the media session service is running before we start.
+        ensurePlaybackServiceStarted()
+
+        exoPlayer.setMediaSource(buildMediaSource(mediaItemBuilder.build(), streamInfo.headers))
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = true
+    }
+
+    /** YouTube video ids are 11 URL-safe characters; anything else skips the sniffer. */
+    private fun looksLikeYouTubeVideoId(id: String): Boolean =
+        id.length == 11 && id.all { it.isLetterOrDigit() || it == '-' || it == '_' }
 
     fun togglePlayPause() {
         try {
@@ -313,6 +487,9 @@ class MusicPlayerManager(
         } catch (e: Exception) {
             Log.w(TAG, "retry: reset failed: ${e.message}")
         }
+        // A manual retry may pick a different source, so clear the failover guard too.
+        soundCloudTriedForCurrentTrack = false
+        currentSource = StreamSource.NONE
         _playbackState.update { it.copy(errorMessage = null, isLoading = true) }
         resolveAndStartPlayback(track)
     }
@@ -481,6 +658,7 @@ class MusicPlayerManager(
 
     fun release() {
         stopProgressTracker()
+        resolveJob?.cancel()
         try {
             exoPlayer.release()
         } catch (e: Exception) {

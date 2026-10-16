@@ -1,8 +1,6 @@
 package com.example.data.remote.innertube
 
-import android.net.Uri
 import android.util.Log
-import com.example.domain.model.StreamInfo
 import com.example.domain.model.Track
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -14,6 +12,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+/**
+ * YouTube Music search / suggestion client.
+ *
+ * IMPORTANT: this client only performs *search*. The old `resolveStream()` player
+ * extraction was removed on purpose - every anonymous Innertube client (ANDROID,
+ * ANDROID_VR, IOS, WEB, WEB_REMIX, TVHTML5*, ...) now answers LOGIN_REQUIRED,
+ * UNPLAYABLE or HTTP 400/404, so calling it only wasted time and bandwidth.
+ *
+ * Playable YouTube audio is obtained one layer up, in
+ * `com.example.playback.YouTubeWebViewSniffer`, which drives a real browser session
+ * (headless WebView) - the only thing that can satisfy YouTube's PoToken / `n`-param
+ * challenge. SoundCloud is the fallback source.
+ */
 class InnerTubeApiClient {
 
     private val client = OkHttpClient.Builder()
@@ -23,45 +34,6 @@ class InnerTubeApiClient {
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
-
-    /**
-     * A single Innertube client profile. Different clients are treated by YouTube as
-     * different app versions; trying several of them dramatically improves the odds
-     * that at least one returns a playable, non-throttled audio stream.
-     */
-    private data class ClientSpec(
-        val name: String,
-        val version: String,
-        val androidSdk: Int?,
-        val userAgent: String
-    )
-
-    private val playerClients = listOf(
-        ClientSpec(
-            name = "ANDROID_VR",
-            version = "1.60.19",
-            androidSdk = 32,
-            userAgent = "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12; GB) gzip"
-        ),
-        ClientSpec(
-            name = "IOS",
-            version = "19.45.4",
-            androidSdk = null,
-            userAgent = "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)"
-        ),
-        ClientSpec(
-            name = "ANDROID",
-            version = "19.44.38",
-            androidSdk = 34,
-            userAgent = "com.google.android.youtube/19.44.38 (Linux; U; Android 14) gzip"
-        ),
-        ClientSpec(
-            name = "WEB_REMIX",
-            version = "1.20241113.01.00",
-            androidSdk = null,
-            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-    )
 
     suspend fun search(query: String): Result<List<Track>> = withContext(Dispatchers.IO) {
         if (query.isBlank()) return@withContext Result.success(emptyList())
@@ -172,152 +144,6 @@ class InnerTubeApiClient {
             Log.w(TAG, "Suggestions error: ${e.message}")
         }
         emptyList()
-    }
-
-    /**
-     * Tries several Innertube clients in order and returns the first playable audio stream.
-     */
-    suspend fun resolveStream(videoId: String): Result<StreamInfo> = withContext(Dispatchers.IO) {
-        for (clientSpec in playerClients) {
-            try {
-                val info = queryPlayer(videoId, clientSpec)
-                if (info != null) {
-                    Log.i(TAG, "Resolved stream via ${clientSpec.name}: ${info.mimeType}")
-                    return@withContext Result.success(info)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "${clientSpec.name} player request failed: ${e.message}")
-            }
-        }
-        Result.failure(Exception("Could not extract a playable audio stream from InnerTube"))
-    }
-
-    private fun queryPlayer(videoId: String, spec: ClientSpec): StreamInfo? {
-        val url = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
-        val body = JSONObject().apply {
-            put("context", JSONObject().apply {
-                put("client", JSONObject().apply {
-                    put("clientName", spec.name)
-                    put("clientVersion", spec.version)
-                    put("hl", "en")
-                    put("gl", "US")
-                    if (spec.androidSdk != null) put("androidSdkVersion", spec.androidSdk)
-                })
-            })
-            put("videoId", videoId)
-            put("contentCheckOk", true)
-            put("racyCheckOk", true)
-        }
-
-        val request = Request.Builder()
-            .url(url)
-            .post(body.toString().toRequestBody(jsonMediaType))
-            .addHeader("User-Agent", spec.userAgent)
-            .addHeader("X-Goog-Api-Format-Version", "2")
-            .addHeader("X-YouTube-Client-Name", clientNameId(spec.name))
-            .addHeader("X-YouTube-Client-Version", spec.version)
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
-            val bodyString = response.body?.string() ?: return null
-            return extractStreamInfo(bodyString)
-        }
-    }
-
-    private fun clientNameId(name: String): String = when (name) {
-        "ANDROID_VR" -> "28"
-        "IOS" -> "5"
-        "ANDROID" -> "3"
-        "WEB_REMIX" -> "67"
-        else -> "3"
-    }
-
-    /**
-     * Picks the best audio-only stream from the player response, falling back to a
-     * combined (muxed) format when no adaptive audio track is available.
-     */
-    private fun extractStreamInfo(jsonString: String): StreamInfo? {
-        try {
-            val json = JSONObject(jsonString)
-            val status = json.optJSONObject("playabilityStatus")?.optString("status")
-            if (status != null && status != "OK" && status != "LIVE_STREAM_OFFLINE") {
-                Log.w(TAG, "playabilityStatus=$status for a client")
-                return null
-            }
-
-            val streamingData = json.optJSONObject("streamingData") ?: return null
-
-            val adaptiveFormats = streamingData.optJSONArray("adaptiveFormats")
-            val bestAudio = pickBestAudio(adaptiveFormats)
-            if (bestAudio != null) return bestAudio
-
-            // Fallback: a muxed format (contains both audio and video).
-            val formats = streamingData.optJSONArray("formats")
-            if (formats != null) {
-                for (i in 0 until formats.length()) {
-                    val format = formats.optJSONObject(i) ?: continue
-                    val streamUrl = extractFormatUrl(format) ?: continue
-                    val mime = format.optString("mimeType").substringBefore(";").trim()
-                    return StreamInfo(streamUrl, mime.ifBlank { null })
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error extracting stream info: ${e.message}")
-        }
-        return null
-    }
-
-    private fun pickBestAudio(formats: JSONArray?): StreamInfo? {
-        if (formats == null) return null
-        var bestUrl: String? = null
-        var bestMime: String? = null
-        var bestScore = -1L
-
-        for (i in 0 until formats.length()) {
-            val format = formats.optJSONObject(i) ?: continue
-            val mimeType = format.optString("mimeType")
-            if (!mimeType.contains("audio/")) continue
-
-            val streamUrl = extractFormatUrl(format) ?: continue
-            val container = mimeType.substringBefore(";").trim()
-            val bitrate = format.optLong("bitrate", 0L)
-
-            // Prefer mp4/AAC (best device compatibility) over webm/Opus, then highest bitrate.
-            val containerScore = when {
-                container.contains("mp4") -> 2L
-                container.contains("webm") -> 1L
-                else -> 0L
-            }
-            val score = containerScore * 100_000_000L + bitrate
-            if (score > bestScore) {
-                bestScore = score
-                bestUrl = streamUrl
-                bestMime = container.ifBlank { null }
-            }
-        }
-        return bestUrl?.let { StreamInfo(it, bestMime) }
-    }
-
-    /**
-     * Reads a playable URL from a format object, handling both the plain `url` field
-     * and the `signatureCipher` / `cipher` variants used by some clients.
-     */
-    private fun extractFormatUrl(format: JSONObject): String? {
-        val direct = format.optString("url")
-        if (direct.isNotBlank()) return direct
-
-        val cipher = format.optString("signatureCipher").ifBlank { format.optString("cipher") }
-        if (cipher.isNotBlank()) {
-            try {
-                val parsed = Uri.parse("https://example.com/?$cipher")
-                val url = parsed.getQueryParameter("url")
-                if (!url.isNullOrBlank()) return url
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to parse cipher url: ${e.message}")
-            }
-        }
-        return null
     }
 
     private fun parseSearchResponse(jsonString: String): List<Track> {

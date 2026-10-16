@@ -27,13 +27,18 @@ data class Track(
 /**
  * A resolved, directly playable audio stream.
  *
- * @param url The direct media URL (googlevideo / Piped / Invidious / local file).
- * @param mimeType Optional container mime type (e.g. "audio/mp4"), used to help the
- * player parse extension-less stream URLs reliably.
+ * @param url The direct media URL (googlevideo / SoundCloud / local file).
+ * @param mimeType Optional container mime type (e.g. "audio/mp4", or
+ * "application/x-mpegURL" for an HLS playlist), used to help the player parse
+ * extension-less stream URLs reliably.
+ * @param headers Per-stream HTTP headers that the CDN requires (YouTube needs a
+ * Referer + the browser session Cookie, SoundCloud needs a Referer). Merged on top
+ * of the player's default media headers.
  */
 data class StreamInfo(
     val url: String,
-    val mimeType: String? = null
+    val mimeType: String? = null,
+    val headers: Map<String, String> = emptyMap()
 )
 
 data class Playlist(

@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.suziee.kmvpx"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -107,6 +107,7 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
   implementation(libs.androidx.media3.exoplayer)
+  implementation(libs.androidx.media3.exoplayer.hls)
   implementation(libs.androidx.media3.datasource)
   implementation(libs.androidx.media3.session)
   implementation(libs.androidx.media3.ui)

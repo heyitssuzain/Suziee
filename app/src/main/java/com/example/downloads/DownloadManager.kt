@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.example.data.local.SuzieeDatabase
 import com.example.data.local.entities.DownloadEntity
+import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.repository.MusicRepository
 import com.example.domain.model.Track
 import kotlinx.coroutines.CancellationException
@@ -49,8 +50,10 @@ class DownloadManager(
                     )
                 )
 
-                // 1. Resolve stream URL
-                val streamResult = repository.resolveStreamUrl(track)
+                // 1. Resolve stream URL.
+                //    `allowHls = false`: an HLS playlist is a text index of segments, so it
+                //    cannot be saved as a single audio file. We require a progressive file.
+                val streamResult = repository.resolveStreamUrl(track, allowHls = false)
                 if (streamResult.isFailure) {
                     downloadDao.upsertDownload(
                         DownloadEntity(
@@ -77,14 +80,28 @@ class DownloadManager(
                 val musicDir = File(context.filesDir, "downloads")
                 if (!musicDir.exists()) musicDir.mkdirs()
 
-                // Sanitize file name
-                val safeFileName = "${track.id}_${track.title.replace(Regex("[^a-zA-Z0-9.-]"), "_")}.m4a"
+                // Sanitize file name. The container follows the resolved stream.
+                val extension = when {
+                    streamInfo.mimeType?.contains("mpeg", ignoreCase = true) == true -> "mp3"
+                    streamInfo.mimeType?.contains("m4a", ignoreCase = true) == true -> "m4a"
+                    streamInfo.mimeType?.contains("mp4", ignoreCase = true) == true -> "m4a"
+                    streamUrl.contains(".mp3", ignoreCase = true) -> "mp3"
+                    else -> "m4a"
+                }
+                val safeFileName =
+                    "${track.id}_${track.title.replace(Regex("[^a-zA-Z0-9.-]"), "_")}.$extension"
                 val destinationFile = File(musicDir, safeFileName)
+
+                // Stream-specific headers win over the baseline ones.
+                val requestHeaders = mutableMapOf(
+                    "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
+                    "Referer" to "https://soundcloud.com/"
+                )
+                requestHeaders.putAll(streamInfo.headers)
 
                 val request = Request.Builder()
                     .url(streamUrl)
-                    .addHeader("User-Agent", com.example.data.remote.innertube.InnerTubeApiClient.MEDIA_USER_AGENT)
-                    .addHeader("Referer", "https://www.youtube.com/")
+                    .apply { requestHeaders.forEach { (name, value) -> addHeader(name, value) } }
                     .build()
                 httpClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {

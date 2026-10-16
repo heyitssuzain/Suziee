@@ -6,11 +6,10 @@ import com.example.data.local.entities.HistoryEntity
 import com.example.data.local.entities.PlaylistEntity
 import com.example.data.local.entities.PlaylistTrackCrossRef
 import com.example.data.local.entities.TrackEntity
-import com.example.data.remote.fallback.DistributedFallbackStreamResolver
-import com.example.data.remote.fallback.FallbackStreamResolver
 import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.remote.lyrics.LrclibApiClient
 import com.example.data.remote.lyrics.LyricsResult
+import com.example.data.remote.soundcloud.SoundCloudApiClient
 import com.example.domain.model.Playlist
 import com.example.domain.model.StreamInfo
 import com.example.domain.model.Track
@@ -24,7 +23,7 @@ import java.util.UUID
 class MusicRepository(
     private val database: SuzieeDatabase,
     private val innerTubeApi: InnerTubeApiClient = InnerTubeApiClient(),
-    private val fallbackResolver: FallbackStreamResolver = DistributedFallbackStreamResolver(),
+    private val soundCloudApi: SoundCloudApiClient = SoundCloudApiClient(),
     private val lrclibApi: LrclibApiClient = LrclibApiClient()
 ) {
     private val trackDao = database.trackDao()
@@ -48,7 +47,21 @@ class MusicRepository(
         return innerTubeApi.getSuggestions(query)
     }
 
-    suspend fun resolveStreamUrl(track: Track): Result<StreamInfo> {
+    /**
+     * Resolves a directly playable audio URL for [track] from the SoundCloud source.
+     *
+     * This used to try the YouTube InnerTube player API and then Piped/Invidious
+     * mirrors. All of those were removed: every one of them answers LOGIN_REQUIRED,
+     * UNPLAYABLE or HTTP 400/404 for anonymous requests, so they only burned time and
+     * bandwidth. YouTube tracks are still played - that resolution happens one layer up
+     * in `MusicPlayerManager`, which first drives the headless-WebView sniffer (a real
+     * YouTube browser session) and only calls down to this SoundCloud path when the
+     * sniffer fails.
+     *
+     * @param allowHls when false only a single progressive file is accepted. The
+     * downloader sets this because an HLS playlist cannot be saved as one audio file.
+     */
+    suspend fun resolveStreamUrl(track: Track, allowHls: Boolean = true): Result<StreamInfo> {
         // If downloaded locally, use the local file path!
         val localPath = track.localFilePath
         if (track.isDownloaded && !localPath.isNullOrBlank()) {
@@ -56,18 +69,12 @@ class MusicRepository(
         }
 
         return withTimeoutOrNull(RESOLVE_TIMEOUT_MS) {
-            // 1. Try Primary InnerTube (tries several clients internally)
-            val primary = innerTubeApi.resolveStream(track.id).getOrNull()
-            if (primary != null && primary.url.isNotBlank()) {
-                runCatching { trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = primary.url))) }
-                return@withTimeoutOrNull Result.success(primary)
-            }
-
-            // 2. Try Fallback Stream Resolver (Piped / Invidious)
-            val fallback = fallbackResolver.resolve(track).getOrNull()
-            if (fallback != null && fallback.url.isNotBlank()) {
-                runCatching { trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = fallback.url))) }
-                return@withTimeoutOrNull Result.success(fallback)
+            val soundCloud = soundCloudApi.resolve(track, allowHls = allowHls)
+            if (soundCloud != null && soundCloud.url.isNotBlank()) {
+                runCatching {
+                    trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = soundCloud.url)))
+                }
+                return@withTimeoutOrNull Result.success(soundCloud)
             }
 
             Result.failure(Exception("Unable to resolve playable audio stream for ${track.title}"))
