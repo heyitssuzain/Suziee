@@ -1,6 +1,7 @@
 package com.example.playback
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import androidx.annotation.OptIn
@@ -11,14 +12,21 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
+import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.repository.MusicRepository
 import com.example.domain.model.Track
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,36 +62,58 @@ class MusicPlayerManager(
     private val preferences: SuzieePreferences,
     val repository: MusicRepository = MusicRepository(database)
 ) {
-    // Start the MediaPlaybackService to ensure foreground playback
-    init {
-        try {
-            val serviceIntent = android.content.Intent(context, MediaPlaybackService::class.java)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start MediaPlaybackService: ${e.message}", e)
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    /**
+     * Media requests (googlevideo.com and friends) require a matching User-Agent and
+     * a YouTube Referer, otherwise the CDN answers 403 Forbidden. These default
+     * request properties are applied to every stream ExoPlayer fetches.
+     */
+    private val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        .setUserAgent(InnerTubeApiClient.MEDIA_USER_AGENT)
+        .setConnectTimeoutMs(15_000)
+        .setReadTimeoutMs(20_000)
+        .setAllowCrossProtocolRedirects(true)
+        .setDefaultRequestProperties(
+            mapOf(
+                "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
+                "Referer" to "https://www.youtube.com/",
+                "Origin" to "https://www.youtube.com",
+                "Accept-Language" to "en-US,en;q=0.9"
+            )
+        )
+
+    private val dataSourceFactory: DataSource.Factory =
+        DefaultDataSource.Factory(context, httpDataSourceFactory)
+
+    val exoPlayer: ExoPlayer = ExoPlayer.Builder(context)
+        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+        .setLoadControl(
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    15_000, // min buffer
+                    60_000, // max buffer
+                    1_000,  // buffer needed to start playback
+                    3_000   // buffer needed after a rebuffer
+                )
+                .build()
+        )
+        .build()
+        .apply {
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build()
+            setAudioAttributes(audioAttributes, true)
+            setHandleAudioBecomingNoisy(true)
         }
-    }
-
-    private val scope = CoroutineScope(Dispatchers.Main + Job())
-
-    val exoPlayer: ExoPlayer = ExoPlayer.Builder(context).build().apply {
-        val audioAttributes = AudioAttributes.Builder()
-            .setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-            .build()
-        setAudioAttributes(audioAttributes, true)
-        setHandleAudioBecomingNoisy(true)
-    }
 
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
     private var progressTrackerJob: Job? = null
     private var originalQueue: List<Track> = emptyList()
+    private var serviceStarted = false
 
     init {
         exoPlayer.addListener(object : Player.Listener {
@@ -133,6 +163,27 @@ class MusicPlayerManager(
         })
     }
 
+    /**
+     * Starts the playback service lazily, right as playback begins.
+     *
+     * Previously this ran at app launch via startForegroundService(), but nothing was
+     * playing yet, so Android raised a "did not call startForeground" ANR. We now:
+     *   1. Start it only when we actually have media to play, and
+     *   2. Use a plain started service (no 5-second foreground deadline). Media3's
+     *      MediaSessionService promotes itself to foreground as soon as playback is
+     *      ongoing, so background playback still works.
+     */
+    private fun ensurePlaybackServiceStarted() {
+        if (serviceStarted) return
+        try {
+            val intent = Intent(context, MediaPlaybackService::class.java)
+            context.startService(intent)
+            serviceStarted = true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start MediaPlaybackService: ${e.message}", e)
+        }
+    }
+
     fun playTrack(track: Track, newQueue: List<Track> = listOf(track)) {
         val queue = if (newQueue.none { it.id == track.id }) {
             newQueue + track
@@ -160,67 +211,92 @@ class MusicPlayerManager(
 
     private fun resolveAndStartPlayback(track: Track) {
         scope.launch {
-            _playbackState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                _playbackState.update { it.copy(isLoading = true, errorMessage = null) }
 
-            // Record to history
-            repository.recordPlayed(track)
+                // Record to history (best effort - never block or crash playback).
+                runCatching { repository.recordPlayed(track) }
+                    .onFailure { Log.w(TAG, "Failed to record play history: ${it.message}") }
 
-            val uriToPlay: Uri? = when {
-                // If local file exists, play offline!
-                track.isDownloaded && !track.localFilePath.isNullOrBlank() && File(track.localFilePath).exists() -> {
-                    Log.i(TAG, "Playing local offline track: ${track.localFilePath}")
-                    Uri.fromFile(File(track.localFilePath))
-                }
-                else -> {
+                // Resolve either a local file or a remote stream.
+                val localFile = track.localFilePath
+                    ?.takeIf { track.isDownloaded && !it.isNullOrBlank() }
+                    ?.let { File(it) }
+                    ?.takeIf { it.exists() }
+
+                val mediaUri: Uri
+                val mimeType: String?
+
+                if (localFile != null) {
+                    Log.i(TAG, "Playing local offline track: ${localFile.absolutePath}")
+                    mediaUri = Uri.fromFile(localFile)
+                    mimeType = null
+                } else {
                     val streamResult = repository.resolveStreamUrl(track)
-                    if (streamResult.isSuccess) {
-                        val url = streamResult.getOrThrow()
-                        Log.i(TAG, "Playing resolved online stream: $url")
-                        Uri.parse(url)
-                    } else {
-                        Log.e(TAG, "Failed stream resolution: ${streamResult.exceptionOrNull()?.message}")
+                    val streamInfo = streamResult.getOrNull()
+                    if (streamInfo == null) {
+                        val reason = streamResult.exceptionOrNull()?.message ?: "Unknown error"
+                        Log.e(TAG, "Failed stream resolution: $reason")
                         _playbackState.update {
                             it.copy(
                                 isLoading = false,
                                 isPlaying = false,
-                                errorMessage = "Track stream unavailable. Tap to retry or select another track."
+                                errorMessage = "Couldn't play this track. Tap retry or pick another song."
                             )
                         }
-                        null
+                        return@launch
                     }
+                    Log.i(TAG, "Playing resolved stream: ${streamInfo.url.take(80)}...")
+                    mediaUri = Uri.parse(streamInfo.url)
+                    mimeType = streamInfo.mimeType
                 }
-            }
 
-            if (uriToPlay != null) {
                 val mediaMetadata = MediaMetadata.Builder()
                     .setTitle(track.title)
                     .setArtist(track.artist)
                     .setArtworkUri(if (track.artworkUrl.isNotBlank()) Uri.parse(track.artworkUrl) else null)
                     .build()
 
-                val mediaItem = MediaItem.Builder()
-                    .setUri(uriToPlay)
+                val mediaItemBuilder = MediaItem.Builder()
+                    .setUri(mediaUri)
                     .setMediaId(track.id)
                     .setMediaMetadata(mediaMetadata)
-                    .build()
 
-                exoPlayer.setMediaItem(mediaItem)
+                if (!mimeType.isNullOrBlank()) {
+                    mediaItemBuilder.setMimeType(mimeType)
+                }
+
+                // Make sure the media session service is running before we start.
+                ensurePlaybackServiceStarted()
+
+                exoPlayer.setMediaItem(mediaItemBuilder.build())
                 exoPlayer.prepare()
-                                exoPlayer.setPlayWhenReady(true)
-                exoPlayer.play()
+                exoPlayer.playWhenReady = true
+            } catch (e: Exception) {
+                Log.e(TAG, "Playback start failed: ${e.message}", e)
+                _playbackState.update {
+                    it.copy(
+                        isLoading = false,
+                        isPlaying = false,
+                        errorMessage = "Playback failed: ${e.localizedMessage ?: "Unknown error"}"
+                    )
+                }
             }
         }
     }
 
     fun togglePlayPause() {
-        if (exoPlayer.isPlaying) {
-            exoPlayer.pause()
-        } else {
-            if (exoPlayer.playbackState == Player.STATE_ENDED) {
-                exoPlayer.seekTo(0)
+        try {
+            if (exoPlayer.isPlaying) {
+                exoPlayer.pause()
+            } else {
+                if (exoPlayer.playbackState == Player.STATE_ENDED) {
+                    exoPlayer.seekTo(0)
+                }
+                exoPlayer.playWhenReady = true
             }
-                            exoPlayer.setPlayWhenReady(true)
-                exoPlayer.play()
+        } catch (e: Exception) {
+            Log.e(TAG, "togglePlayPause failed: ${e.message}", e)
         }
     }
 
@@ -345,8 +421,7 @@ class MusicPlayerManager(
         when (_playbackState.value.repeatMode) {
             RepeatMode.ONE -> {
                 exoPlayer.seekTo(0)
-                                exoPlayer.setPlayWhenReady(true)
-                exoPlayer.play()
+                exoPlayer.playWhenReady = true
             }
             else -> {
                 playNext()
@@ -362,7 +437,7 @@ class MusicPlayerManager(
                     val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
                     val dur = exoPlayer.duration.coerceAtLeast(0L)
                     // Generate realistic smooth audio visualizer amplitudes
-                    val amps = List(16) { i ->
+                    val amps = List(16) {
                         val base = 0.2f + 0.75f * Random.nextFloat()
                         base.coerceIn(0.1f, 1.0f)
                     }
@@ -389,7 +464,11 @@ class MusicPlayerManager(
 
     fun release() {
         stopProgressTracker()
-        exoPlayer.release()
+        try {
+            exoPlayer.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "Player release failed: ${e.message}")
+        }
     }
 
     companion object {

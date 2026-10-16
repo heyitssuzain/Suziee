@@ -1,6 +1,7 @@
 package com.example.playback
 
 import android.content.Intent
+import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -13,8 +14,13 @@ class MediaPlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        val playerManager = (application as SuzieeApplication).playerManager
-        mediaSession = MediaSession.Builder(this, playerManager.exoPlayer).build()
+        try {
+            val app = application as SuzieeApplication
+            mediaSession = MediaSession.Builder(this, app.playerManager.exoPlayer).build()
+        } catch (e: Exception) {
+            // Never let a session/notification problem take the whole app down.
+            Log.e(TAG, "Failed to create MediaSession: ${e.message}", e)
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
@@ -29,11 +35,19 @@ class MediaPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        mediaSession?.run {
-            player.release()
-            release()
-            mediaSession = null
+        // Only tear down the session. The ExoPlayer instance is owned by
+        // MusicPlayerManager (Application scope) and must NOT be released here,
+        // otherwise the UI would be left holding a released, unusable player.
+        try {
+            mediaSession?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to release MediaSession: ${e.message}")
         }
+        mediaSession = null
         super.onDestroy()
+    }
+
+    companion object {
+        private const val TAG = "MediaPlaybackService"
     }
 }

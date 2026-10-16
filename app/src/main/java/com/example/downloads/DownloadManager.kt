@@ -62,7 +62,8 @@ class DownloadManager(
                     return@launch
                 }
 
-                val streamUrl = streamResult.getOrThrow()
+                val streamInfo = streamResult.getOrThrow()
+                val streamUrl = streamInfo.url
 
                 // 2. Download file to app-private storage
                 downloadDao.upsertDownload(
@@ -80,7 +81,11 @@ class DownloadManager(
                 val safeFileName = "${track.id}_${track.title.replace(Regex("[^a-zA-Z0-9.-]"), "_")}.m4a"
                 val destinationFile = File(musicDir, safeFileName)
 
-                val request = Request.Builder().url(streamUrl).build()
+                val request = Request.Builder()
+                    .url(streamUrl)
+                    .addHeader("User-Agent", com.example.data.remote.innertube.InnerTubeApiClient.MEDIA_USER_AGENT)
+                    .addHeader("Referer", "https://www.youtube.com/")
+                    .build()
                 httpClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         downloadDao.upsertDownload(

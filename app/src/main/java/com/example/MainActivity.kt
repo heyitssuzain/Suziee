@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -86,9 +87,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var downloadManager: DownloadManager
     private lateinit var voiceRecognizer: VoiceRecognizer
 
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result ignored */ }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        requestNotificationPermissionIfNeeded()
 
         val app = application as SuzieeApplication
         playerManager = app.playerManager
@@ -102,6 +108,20 @@ class MainActivity : ComponentActivity() {
                     downloadManager = downloadManager,
                     voiceRecognizer = voiceRecognizer
                 )
+            }
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                runCatching {
+                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
             }
         }
     }

@@ -24,6 +24,18 @@ data class Track(
         }
 }
 
+/**
+ * A resolved, directly playable audio stream.
+ *
+ * @param url The direct media URL (googlevideo / Piped / Invidious / local file).
+ * @param mimeType Optional container mime type (e.g. "audio/mp4"), used to help the
+ * player parse extension-less stream URLs reliably.
+ */
+data class StreamInfo(
+    val url: String,
+    val mimeType: String? = null
+)
+
 data class Playlist(
     val id: String,
     val name: String,

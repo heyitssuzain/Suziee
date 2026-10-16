@@ -12,11 +12,13 @@ import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.remote.lyrics.LrclibApiClient
 import com.example.data.remote.lyrics.LyricsResult
 import com.example.domain.model.Playlist
+import com.example.domain.model.StreamInfo
 import com.example.domain.model.Track
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 class MusicRepository(
@@ -46,29 +48,30 @@ class MusicRepository(
         return innerTubeApi.getSuggestions(query)
     }
 
-    suspend fun resolveStreamUrl(track: Track): Result<String> {
+    suspend fun resolveStreamUrl(track: Track): Result<StreamInfo> {
         // If downloaded locally, use the local file path!
-        if (track.isDownloaded && !track.localFilePath.isNullOrBlank()) {
-            return Result.success(track.localFilePath)
+        val localPath = track.localFilePath
+        if (track.isDownloaded && !localPath.isNullOrBlank()) {
+            return Result.success(StreamInfo(localPath))
         }
 
-        // 1. Try Primary InnerTube
-        val primaryResult = innerTubeApi.resolveStream(track.id)
-        if (primaryResult.isSuccess && !primaryResult.getOrNull().isNullOrBlank()) {
-            val url = primaryResult.getOrThrow()
-            trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = url)))
-            return Result.success(url)
-        }
+        return withTimeoutOrNull(RESOLVE_TIMEOUT_MS) {
+            // 1. Try Primary InnerTube (tries several clients internally)
+            val primary = innerTubeApi.resolveStream(track.id).getOrNull()
+            if (primary != null && primary.url.isNotBlank()) {
+                runCatching { trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = primary.url))) }
+                return@withTimeoutOrNull Result.success(primary)
+            }
 
-        // 2. Try Fallback Stream Resolver
-        val fallbackResult = fallbackResolver.resolve(track)
-        if (fallbackResult.isSuccess && !fallbackResult.getOrNull().isNullOrBlank()) {
-            val url = fallbackResult.getOrThrow()
-            trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = url)))
-            return Result.success(url)
-        }
+            // 2. Try Fallback Stream Resolver (Piped / Invidious)
+            val fallback = fallbackResolver.resolve(track).getOrNull()
+            if (fallback != null && fallback.url.isNotBlank()) {
+                runCatching { trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = fallback.url))) }
+                return@withTimeoutOrNull Result.success(fallback)
+            }
 
-        return Result.failure(Exception("Unable to resolve playable audio stream for ${track.title}"))
+            Result.failure(Exception("Unable to resolve playable audio stream for ${track.title}"))
+        } ?: Result.failure(Exception("Stream resolution timed out. Please try again."))
     }
 
     suspend fun getLyrics(track: Track): Result<LyricsResult> {
@@ -169,5 +172,10 @@ class MusicRepository(
     suspend fun removeDownloadedTrack(trackId: String) {
         trackDao.updateDownloadStatus(trackId, isDownloaded = false, localPath = null)
         downloadDao.deleteDownload(trackId)
+    }
+
+    companion object {
+        /** Upper bound for a full stream-resolution attempt (primary + fallbacks). */
+        private const val RESOLVE_TIMEOUT_MS = 30_000L
     }
 }
