@@ -1,0 +1,6 @@
+{
+  "name": "Suziee",
+  "description": "Premium Anime Music Player featuring online music search, stream playback, background media controls, offline downloads, lyrics synchronization, and voice commands.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
