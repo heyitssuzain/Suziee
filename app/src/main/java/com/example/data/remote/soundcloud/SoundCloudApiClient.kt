@@ -8,11 +8,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
-import kotlin.math.max
 
 /**
  * FALLBACK SOURCE - SoundCloud public API.
@@ -21,20 +21,27 @@ import kotlin.math.max
  * capture a YouTube stream (5s timeout) or when the captured YouTube stream dies with a
  * persistent playback error.
  *
- * Why SoundCloud? It is the only mainstream catalogue we could verify end-to-end that
- * still serves audio to anonymous clients:
- *   - the public `api-v2.soundcloud.com` search endpoint works with a plain `client_id`
- *     (no OAuth, no user login),
- *   - the track's `media.transcodings` resolve to a directly playable stream
- *     (a progressive MP3, or an HLS `.m3u8` playlist that ExoPlayer plays natively).
+ * ## Why the selection logic is so defensive
+ * SoundCloud's official/label uploads are published with `policy = "SNIP"`: the track
+ * advertises its real length (`full_duration`) but only ever streams a **30 second
+ * preview**, flagged per-transcoding as `snipped = true`. A naive "best title match"
+ * therefore resolves to the *official* upload and playback just stops at 0:30.
  *
- * The catch is the `client_id`: it is not a fixed constant, it rotates with every
- * SoundCloud web release. So we scrape it from the public web player: load
- * `soundcloud.com`, collect the `a-v2.sndcdn.com` JS bundles it references, and pull the
- * 32-char `client_id` out of one of them. The value is cached in memory and refreshed
- * automatically whenever the API answers 401/403.
+ * So we:
+ *   1. reject every SNIP / non-ALLOW track and every `snipped` transcoding,
+ *   2. reject anything clearly truncated (`full_duration` >> `duration`) or too short,
+ *   3. require the duration to be in the same ballpark as the requested track,
+ *   4. rank what is left (title, artist, duration closeness, minus a penalty for
+ *      decorations like "remix"/"slowed"/"cover"),
+ *   5. try the ranked candidates **one by one**, and
+ *   6. actually fetch a few bytes of each resolved URL to prove it plays before handing
+ *      it to ExoPlayer. This is what turns "Could not play this track" into a track that
+ *      plays from a different (worthwhile) upload of the same song.
  *
- * Nothing here touches the UI - it is pure network + JSON, safe on Dispatchers.IO.
+ * ## client_id
+ * The API key is not a fixed constant; it rotates with every SoundCloud web release, so
+ * it is scraped from the public web player's JS bundles, cached in memory, and refreshed
+ * automatically on 401/403.
  */
 class SoundCloudApiClient {
 
@@ -51,33 +58,50 @@ class SoundCloudApiClient {
     /**
      * Resolves [track] (matched by title + artist) to a directly playable stream.
      *
-     * @param allowHls when false, only a single progressive file is accepted. The
-     * downloader uses this because an HLS playlist cannot be saved as one audio file.
-     * @return a playable [StreamInfo], or null when nothing suitable was found.
+     * @param allowHls when false only a single progressive file is accepted. Used by the
+     * simple downloader fast-path (an HLS playlist is not a file; when we must have one
+     * file the HLS route is stitched together by `HlsDownloader` instead).
+     * @return a verified, playable [StreamInfo], or null when nothing suitable was found.
      */
     suspend fun resolve(track: Track, allowHls: Boolean = true): StreamInfo? =
         withContext(Dispatchers.IO) {
-            // Two attempts: the first may fail because our cached client_id just expired.
-            repeat(2) { attempt ->
-                try {
+            try {
+                // Two attempts, but the second one only happens when the search itself came
+                // back empty - that is the "cached client_id just expired" symptom. A
+                // search that returns hits simply means no candidate was usable, and
+                // re-running it would only burn time and bandwidth.
+                repeat(2) { attempt ->
                     val clientId = clientId() ?: return@withContext null
 
-                    val match = searchTrack(track, clientId)
-                    if (match != null) {
-                        val stream = resolveTranscoding(match, clientId, allowHls)
-                        if (stream != null) return@withContext stream
+                    val candidates = searchTracks(track, clientId)
+                    if (candidates.isEmpty() && attempt == 0) {
+                        // httpGet already dropped a 401/403 key, so this re-scrapes it.
+                        cachedClientId = null
+                        return@repeat
                     }
 
-                    // Nothing usable. Refresh the key and retry once, then give up.
-                    if (attempt == 0) cachedClientId = null else return@withContext null
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.w(TAG, "SoundCloud attempt ${attempt + 1} failed: ${e.message}")
-                    cachedClientId = null
+                    for (candidate in candidates.take(MAX_CANDIDATES)) {
+                        val stream = resolveTranscoding(candidate, clientId, allowHls) ?: continue
+                        if (verify(stream)) {
+                            Log.i(
+                                TAG,
+                                "Selected '${candidate.optString("title")}' " +
+                                    "(${candidate.optLong("duration") / 1000}s, ${stream.mimeType})"
+                            )
+                            return@withContext stream
+                        }
+                        Log.w(TAG, "Rejected after verification: '${candidate.optString("title")}'")
+                    }
+
+                    return@withContext null
                 }
+                null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "SoundCloud resolve failed: ${e.message}")
+                null
             }
-            null
         }
 
     // ---------------------------------------------------------------------------------
@@ -109,57 +133,114 @@ class SoundCloudApiClient {
     }
 
     // ---------------------------------------------------------------------------------
-    // search + match
+    // search, filter and rank
     // ---------------------------------------------------------------------------------
 
-    /** Searches SoundCloud and returns the best-matching, streamable track object. */
-    private fun searchTrack(track: Track, clientId: String): JSONObject? {
-        val query = listOf(track.artist, track.title)
-            .filter { it.isNotBlank() }
-            .joinToString(" ")
-        val encoded = URLEncoder.encode(query, "UTF-8")
-        val url = "$API_URL/search/tracks?q=$encoded&client_id=$clientId" +
-            "&limit=10&app_locale=en&linked_partitioning=0"
+    /** A search hit together with its match score. */
+    private data class Scored(val track: JSONObject, val score: Double)
 
-        val json = httpGetJson(url) ?: return null
-        val collection = json.optJSONArray("collection") ?: return null
+    /**
+     * Searches SoundCloud (artist+title, then title alone) and returns acceptable
+     * candidates, best match first.
+     */
+    private fun searchTracks(track: Track, clientId: String): List<JSONObject> {
+        val queries = listOf(
+            listOf(track.artist, track.title),
+            listOf(track.title)
+        )
 
-        var best: JSONObject? = null
-        var bestScore = 0.0
-        for (i in 0 until collection.length()) {
-            val candidate = collection.optJSONObject(i) ?: continue
-            if (!candidate.optBoolean("streamable", true)) continue
-            val score = matchScore(track, candidate)
-            if (score > bestScore) {
-                bestScore = score
-                best = candidate
+        val seenIds = HashSet<Long>()
+        val scored = mutableListOf<Scored>()
+
+        for (parts in queries) {
+            val query = parts.filter { it.isNotBlank() }.joinToString(" ").trim()
+            if (query.isEmpty()) continue
+
+            val collection = searchCollection(query, clientId) ?: continue
+            for (i in 0 until collection.length()) {
+                val candidate = collection.optJSONObject(i) ?: continue
+
+                val id = candidate.optLong("id", -1L)
+                if (id <= 0L || !seenIds.add(id)) continue
+                if (!isAcceptable(candidate, track)) continue
+
+                val score = matchScore(track, candidate)
+                if (score < MIN_MATCH_SCORE) continue
+                scored += Scored(candidate, score)
             }
+
+            // Enough good options already - skip the second, broader query.
+            if (scored.size >= 4) break
         }
-        // Guard against a wildly wrong result (e.g. a 30s "slowed + reverb" edit of some
-        // unrelated song) being played back when we simply had no good match.
-        return best?.takeIf { bestScore >= MIN_MATCH_SCORE }
+
+        return scored.sortedByDescending { it.score }.map { it.track }
+    }
+
+    private fun searchCollection(query: String, clientId: String): JSONArray? {
+        val url = "$API_URL/search/tracks?q=${encode(query)}&client_id=$clientId" +
+            "&limit=15&app_locale=en&linked_partitioning=0"
+        return httpGetJson(url)?.optJSONArray("collection")
     }
 
     /**
-     * Scores how well a SoundCloud search hit matches the wanted track: mostly on title,
-     * a little on the uploader name, with a bonus/penalty for a close/absurd duration.
+     * Hard filters. Anything rejected here can never be played back in full, so it must
+     * not even be considered.
+     */
+    private fun isAcceptable(candidate: JSONObject, wanted: Track): Boolean {
+        // Explicitly unstreamable?
+        if (candidate.has("streamable") && !candidate.optBoolean("streamable")) return false
+
+        // "SNIP" (and anything that is not a plain "ALLOW") means preview-only audio:
+        // this is the exact reason official uploads stopped at 0:30.
+        val policy = candidate.optString("policy")
+        if (policy.isNotBlank() && !policy.equals("ALLOW", ignoreCase = true)) return false
+
+        val duration = candidate.optLong("duration", 0L)
+        val fullDuration = candidate.optLong("full_duration", duration)
+
+        // 30s previews / very short clips.
+        if (duration < MIN_TRACK_DURATION_MS) return false
+        // Advertised length much longer than the stream we would get = truncated.
+        if (fullDuration - duration > TRUNCATION_TOLERANCE_MS) return false
+
+        // Same ballpark as the track the user actually asked for.
+        if (wanted.durationSeconds > 0L) {
+            val wantedMs = wanted.durationSeconds * 1000L
+            val tolerance = maxOf(MIN_DURATION_TOLERANCE_MS, (wantedMs * DURATION_TOLERANCE_RATIO).toLong())
+            if (abs(duration - wantedMs) > tolerance) return false
+        }
+        return true
+    }
+
+    /**
+     * Scores how well a SoundCloud search hit matches the wanted track.
+     * Title dominates, the uploader name helps, a close duration is a strong signal, and
+     * decorated uploads (remix / slowed / cover / 8D ...) are pushed down so we stay as
+     * close to the original recording as possible.
      */
     private fun matchScore(wanted: Track, candidate: JSONObject): Double {
-        val candidateTitle = candidate.optString("title")
-        val candidateArtist = candidate.optJSONObject("user")?.optString("username").orEmpty()
+        val normalizedTitle = normalize(candidate.optString("title"))
+        val normalizedArtist = normalize(
+            candidate.optJSONObject("user")?.optString("username").orEmpty()
+        )
 
-        val titleScore = similarity(normalize(wanted.title), normalize(candidateTitle))
-        val artistScore = similarity(normalize(wanted.artist), normalize(candidateArtist))
+        val titleSimilarity = similarity(normalize(wanted.title), normalizedTitle)
+        val artistSimilarity = similarity(normalize(wanted.artist), normalizedArtist)
 
-        var score = titleScore * 0.8 + artistScore * 0.2
+        var score = titleSimilarity * 0.45 + artistSimilarity * 0.15
 
-        val durationMs = candidate.optLong("duration", 0L)
-        if (durationMs > 0L && wanted.durationSeconds > 0L) {
-            val deltaSeconds = abs(durationMs / 1000.0 - wanted.durationSeconds)
-            when {
-                deltaSeconds <= 5.0 -> score += 0.15
-                deltaSeconds > 60.0 -> score -= 0.20
-            }
+        val duration = candidate.optLong("duration", 0L).toDouble()
+        if (duration > 0.0 && wanted.durationSeconds > 0L) {
+            val wantedMs = wanted.durationSeconds * 1000.0
+            val tolerance = maxOf(60_000.0, wantedMs * 0.4)
+            val closeness = (1.0 - abs(duration - wantedMs) / tolerance).coerceIn(0.0, 1.0)
+            score += closeness * 0.30
+        } else {
+            score += 0.15
+        }
+
+        DECORATION_PENALTIES.forEach { (word, penalty) ->
+            if (normalizedTitle.contains(word)) score -= penalty
         }
         return score
     }
@@ -194,7 +275,7 @@ class SoundCloudApiClient {
 
         val common = tokensA.count { tokensB.contains(it) }.toDouble()
         val jaccard = common / (tokensA.size + tokensB.size - common).toDouble()
-        return if (b.contains(a) || a.contains(b)) max(jaccard, 0.8) else jaccard
+        return if (b.contains(a) || a.contains(b)) maxOf(jaccard, 0.8) else jaccard
     }
 
     // ---------------------------------------------------------------------------------
@@ -204,11 +285,13 @@ class SoundCloudApiClient {
     /**
      * Turns a SoundCloud track into a playable URL.
      *
-     * SoundCloud exposes several `transcodings` per track. We prefer `progressive`
-     * (a plain MP3 that any player can stream and seek) and only use `hls` when nothing
-     * progressive exists. The transcoding `url` is not the media itself - it is a small
-     * API endpoint that, called with the client_id, returns the real CDN URL in a
-     * `{"url": "..."}` payload.
+     * Only non-snipped transcodings are considered. `progressive` (a plain MP3 that any
+     * player can stream and seek) is preferred; otherwise the HLS rendition is used, and
+     * only its `audio/mp4` (fragmented MP4/AAC) variant - the `audio/mpegurl` variant does
+     * not resolve reliably.
+     *
+     * A transcoding `url` is not the media itself: it is a small API endpoint that, called
+     * with the client_id, returns the real CDN URL in a `{"url": "..."}` payload.
      */
     private fun resolveTranscoding(
         trackObject: JSONObject,
@@ -220,20 +303,27 @@ class SoundCloudApiClient {
 
         var progressive: JSONObject? = null
         var hls: JSONObject? = null
+
         for (i in 0 until transcodings.length()) {
             val transcoding = transcodings.optJSONObject(i) ?: continue
-            when (transcoding.optJSONObject("format")?.optString("protocol")) {
-                "progressive" -> if (progressive == null) progressive = transcoding
-                "hls" -> if (hls == null) hls = transcoding
+            // A snipped transcoding is a 30s preview - never accept it.
+            if (transcoding.optBoolean("snipped", false)) continue
+
+            val format = transcoding.optJSONObject("format") ?: continue
+            val mime = format.optString("mime_type").lowercase()
+            when {
+                format.optString("protocol") == "progressive" && progressive == null ->
+                    progressive = transcoding
+                format.optString("protocol") == "hls" &&
+                    mime.startsWith("audio/mp4") && hls == null ->
+                    hls = transcoding
             }
         }
 
         val chosen = progressive ?: hls?.takeIf { allowHls } ?: return null
         val isHls = chosen !== progressive
 
-        val transcodingUrl = chosen.optString("url")
-        if (transcodingUrl.isBlank()) return null
-
+        val transcodingUrl = chosen.optString("url").takeIf { it.isNotBlank() } ?: return null
         val mediaUrl = httpGetJson("$transcodingUrl?client_id=$clientId")
             ?.optString("url")
             ?.takeIf { it.isNotBlank() }
@@ -241,9 +331,8 @@ class SoundCloudApiClient {
 
         val mimeType = if (isHls) {
             // Explicit HLS hint: ExoPlayer then picks the HLS extractor even though the
-            // playlist URL has no file extension to sniff. The literal matches media3's
-            // MimeTypes.APPLICATION_M3U8.
-            "application/x-mpegURL"
+            // playlist URL has no file extension to sniff.
+            HLS_MIME
         } else {
             chosen.optJSONObject("format")
                 ?.optString("mime_type")
@@ -253,7 +342,6 @@ class SoundCloudApiClient {
                 ?: "audio/mpeg"
         }
 
-        Log.i(TAG, "Resolved SoundCloud stream (${if (isHls) "hls" else "progressive"}, $mimeType)")
         return StreamInfo(
             url = mediaUrl,
             mimeType = mimeType,
@@ -262,6 +350,42 @@ class SoundCloudApiClient {
                 "Referer" to "$BASE_URL/"
             )
         )
+    }
+
+    /**
+     * Proves the resolved URL actually serves audio before we hand it to ExoPlayer.
+     *
+     * Reads only a few bytes and then closes the body, so a huge file is never buffered.
+     * For an HLS URL we expect an `#EXTM3U` header, for a progressive URL we expect
+     * anything but a playlist - this catches both dead URLs and a resolution that
+     * silently returned the wrong kind of stream.
+     */
+    private fun verify(stream: StreamInfo): Boolean {
+        return try {
+            val request = Request.Builder()
+                .url(stream.url)
+                .header("User-Agent", BROWSER_UA)
+                .header("Referer", "$BASE_URL/")
+                .header("Range", "bytes=0-2047")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "Verify HTTP ${response.code} for ${stream.url.take(60)}...")
+                    return false
+                }
+                val body = response.body ?: return false
+                val buffer = ByteArray(8)
+                val read = body.byteStream().read(buffer)
+                if (read <= 0) return false
+
+                val head = String(buffer, 0, read, Charsets.ISO_8859_1)
+                if (stream.mimeType == HLS_MIME) head.startsWith("#EXTM3U") else !head.startsWith("#EXTM3U")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Verification error: ${e.message}")
+            false
+        }
     }
 
     // ---------------------------------------------------------------------------------
@@ -297,17 +421,56 @@ class SoundCloudApiClient {
             .getOrNull()
     }
 
+    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
+
     private companion object {
         const val TAG = "SoundCloudApiClient"
         const val BASE_URL = "https://soundcloud.com"
         const val API_URL = "https://api-v2.soundcloud.com"
 
+        /** Must match media3's MimeTypes.APPLICATION_M3U8 exactly. */
+        const val HLS_MIME = "application/x-mpegURL"
+
         const val BROWSER_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-        /** Below this score we consider the search hit unrelated and refuse to play it. */
-        const val MIN_MATCH_SCORE = 0.35
+        /** How many ranked candidates we are willing to try before giving up. */
+        const val MAX_CANDIDATES = 6
+
+        /** Below this score a search hit is considered unrelated to the wanted track. */
+        const val MIN_MATCH_SCORE = 0.30
+
+        /** Anything at/under this length is a preview clip, not a song. */
+        const val MIN_TRACK_DURATION_MS = 45_000L
+
+        /** Small drift between advertised and streamed length is normal (silence trim). */
+        const val TRUNCATION_TOLERANCE_MS = 3_000L
+
+        const val MIN_DURATION_TOLERANCE_MS = 45_000L
+        const val DURATION_TOLERANCE_RATIO = 0.35
+
+        /**
+         * Uploads that are a different recording of the same song. Penalised, not banned:
+         * for many mainstream tracks a full-length alternative is the only thing available.
+         */
+        val DECORATION_PENALTIES = mapOf(
+            "remix" to 0.15,
+            "slowed" to 0.20,
+            "reverb" to 0.15,
+            "sped up" to 0.20,
+            "nightcore" to 0.25,
+            "8d" to 0.20,
+            "16d" to 0.20,
+            "mashup" to 0.20,
+            "bootleg" to 0.20,
+            "cover" to 0.10,
+            "live" to 0.15,
+            "karaoke" to 0.30,
+            "instrumental" to 0.25,
+            "edit" to 0.10,
+            "tribute" to 0.20
+        )
 
         val SCRIPT_SRC_REGEX = Regex("""<script[^>]+src="([^"]+)""")
         val CLIENT_ID_REGEX = Regex("""client_id\s*[:=]\s*"([a-zA-Z0-9]{32})""")

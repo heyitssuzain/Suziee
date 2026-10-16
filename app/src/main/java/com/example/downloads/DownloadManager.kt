@@ -6,6 +6,7 @@ import com.example.data.local.SuzieeDatabase
 import com.example.data.local.entities.DownloadEntity
 import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.repository.MusicRepository
+import com.example.domain.model.StreamInfo
 import com.example.domain.model.Track
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -17,10 +18,25 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
+/**
+ * Saves a track to app-private storage so it can be played with no network at all.
+ *
+ * Two routes, tried in order:
+ *
+ *  1. **Progressive** - a plain MP3/MP4 the CDN serves as one file. Cheapest, so it is
+ *     always attempted first.
+ *  2. **HLS stitch** - SoundCloud publishes full-length tracks *only* as HLS, so this is
+ *     the route that actually runs for most tracks. `HlsDownloader` fetches the playlist
+ *     and writes the init segment plus every media segment into a single fragmented MP4,
+ *     giving a genuine offline file (previously this path did not exist, which is why
+ *     downloads always failed).
+ *
+ * The finished file is registered on the track (`localFilePath`) and the player detects
+ * that and plays straight from disk - no `m3u8` text file is ever handed to ExoPlayer.
+ */
 class DownloadManager(
     private val context: Context,
     private val database: SuzieeDatabase,
@@ -35,6 +51,8 @@ class DownloadManager(
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    private val hlsDownloader = HlsDownloader(httpClient, InnerTubeApiClient.MEDIA_USER_AGENT)
+
     val downloadsFlow: Flow<List<DownloadEntity>> = downloadDao.getAllDownloads()
 
     fun downloadTrack(track: Track) {
@@ -42,155 +60,168 @@ class DownloadManager(
 
         val job = scope.launch {
             try {
-                downloadDao.upsertDownload(
-                    DownloadEntity(
-                        trackId = track.id,
-                        status = "RESOLVING",
-                        progressPercent = 0
-                    )
-                )
-
-                // 1. Resolve stream URL.
-                //    `allowHls = false`: an HLS playlist is a text index of segments, so it
-                //    cannot be saved as a single audio file. We require a progressive file.
-                val streamResult = repository.resolveStreamUrl(track, allowHls = false)
-                if (streamResult.isFailure) {
-                    downloadDao.upsertDownload(
-                        DownloadEntity(
-                            trackId = track.id,
-                            status = "FAILED",
-                            errorMessage = "Stream extraction failed: ${streamResult.exceptionOrNull()?.message}"
-                        )
+                // Already saved offline? Nothing to do (the player resolves the same local
+                // path, which is not an http URL and must never be fed to OkHttp).
+                val existingPath = track.localFilePath
+                if (track.isDownloaded && !existingPath.isNullOrBlank() && File(existingPath).exists()) {
+                    upsert(
+                        track.id,
+                        status = "COMPLETED",
+                        progress = 100,
+                        localFilePath = existingPath
                     )
                     return@launch
                 }
 
-                val streamInfo = streamResult.getOrThrow()
-                val streamUrl = streamInfo.url
+                upsert(track.id, status = "RESOLVING", progress = 0)
 
-                // 2. Download file to app-private storage
-                downloadDao.upsertDownload(
-                    DownloadEntity(
-                        trackId = track.id,
-                        status = "DOWNLOADING",
-                        progressPercent = 5
+                val streamInfo = resolveForDownload(track)
+                if (streamInfo == null) {
+                    upsert(
+                        track.id,
+                        status = "FAILED",
+                        error = "Could not find a downloadable stream for this track"
                     )
-                )
+                    return@launch
+                }
+
+                upsert(track.id, status = "DOWNLOADING", progress = 5)
 
                 val musicDir = File(context.filesDir, "downloads")
-                if (!musicDir.exists()) musicDir.mkdirs()
+                val baseName = "${track.id}_${sanitize(track.title)}"
 
-                // Sanitize file name. The container follows the resolved stream.
-                val extension = when {
-                    streamInfo.mimeType?.contains("mpeg", ignoreCase = true) == true -> "mp3"
-                    streamInfo.mimeType?.contains("m4a", ignoreCase = true) == true -> "m4a"
-                    streamInfo.mimeType?.contains("mp4", ignoreCase = true) == true -> "m4a"
-                    streamUrl.contains(".mp3", ignoreCase = true) -> "mp3"
-                    else -> "m4a"
+                val finished: File = if (isHlsStream(streamInfo)) {
+                    downloadHls(track, streamInfo, musicDir, baseName)
+                } else {
+                    downloadProgressive(track, streamInfo, musicDir, baseName)
                 }
-                val safeFileName =
-                    "${track.id}_${track.title.replace(Regex("[^a-zA-Z0-9.-]"), "_")}.$extension"
-                val destinationFile = File(musicDir, safeFileName)
 
-                // Stream-specific headers win over the baseline ones.
-                val requestHeaders = mutableMapOf(
-                    "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
-                    "Referer" to "https://soundcloud.com/"
+                val size = if (finished.exists()) finished.length() else 0L
+                upsert(
+                    track.id,
+                    status = "COMPLETED",
+                    progress = 100,
+                    totalBytes = size,
+                    downloadedBytes = size,
+                    localFilePath = finished.absolutePath
                 )
-                requestHeaders.putAll(streamInfo.headers)
-
-                val request = Request.Builder()
-                    .url(streamUrl)
-                    .apply { requestHeaders.forEach { (name, value) -> addHeader(name, value) } }
-                    .build()
-                httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        downloadDao.upsertDownload(
-                            DownloadEntity(
-                                trackId = track.id,
-                                status = "FAILED",
-                                errorMessage = "HTTP error ${response.code}"
-                            )
-                        )
-                        return@launch
-                    }
-
-                    val body = response.body ?: throw Exception("Empty response body")
-                    val totalBytes = body.contentLength()
-
-                    var downloadedBytes = 0L
-                    val buffer = ByteArray(8 * 1024)
-
-                    body.byteStream().use { input ->
-                        FileOutputStream(destinationFile).use { output ->
-                            var read: Int
-                            var lastProgressUpdate = 0
-                            while (input.read(buffer).also { read = it } != -1) {
-                                output.write(buffer, 0, read)
-                                downloadedBytes += read
-
-                                if (totalBytes > 0) {
-                                    val percent = ((downloadedBytes * 100) / totalBytes).toInt()
-                                    if (percent - lastProgressUpdate >= 5) {
-                                        lastProgressUpdate = percent
-                                        downloadDao.upsertDownload(
-                                            DownloadEntity(
-                                                trackId = track.id,
-                                                status = "DOWNLOADING",
-                                                progressPercent = percent,
-                                                totalBytes = totalBytes,
-                                                downloadedBytes = downloadedBytes,
-                                                localFilePath = destinationFile.absolutePath
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-                            output.flush()
-                        }
-                    }
-
-                    // Completed!
-                    downloadDao.upsertDownload(
-                        DownloadEntity(
-                            trackId = track.id,
-                            status = "COMPLETED",
-                            progressPercent = 100,
-                            totalBytes = totalBytes,
-                            downloadedBytes = downloadedBytes,
-                            localFilePath = destinationFile.absolutePath
-                        )
-                    )
-
-                    // Update track in database with local file path
-                    repository.markTrackDownloaded(track.id, destinationFile.absolutePath)
-                    Log.i(TAG, "Download finished successfully: ${destinationFile.absolutePath}")
-                }
+                repository.markTrackDownloaded(track.id, finished.absolutePath)
+                Log.i(TAG, "Saved offline copy: ${finished.absolutePath} ($size bytes)")
             } catch (e: CancellationException) {
                 Log.i(TAG, "Download cancelled for ${track.id}")
-                downloadDao.upsertDownload(
-                    DownloadEntity(
-                        trackId = track.id,
-                        status = "CANCELLED",
-                        errorMessage = "Download cancelled"
-                    )
-                )
+                upsert(track.id, status = "CANCELLED", error = "Download cancelled")
                 cleanupPartialFile(track.id)
             } catch (e: Exception) {
                 Log.e(TAG, "Download failed for ${track.id}: ${e.message}", e)
-                downloadDao.upsertDownload(
-                    DownloadEntity(
-                        trackId = track.id,
-                        status = "FAILED",
-                        errorMessage = e.localizedMessage ?: "Unknown download error"
-                    )
-                )
+                upsert(track.id, status = "FAILED", error = e.localizedMessage ?: "Download failed")
                 cleanupPartialFile(track.id)
             } finally {
                 activeJobs.remove(track.id)
             }
         }
         activeJobs[track.id] = job
+    }
+
+    /**
+     * Finds something we can save as one file. A single resolve is enough: the SoundCloud
+     * resolver already prefers a progressive file and only falls back to HLS, which is
+     * exactly the choice between the two download routes below.
+     */
+    private suspend fun resolveForDownload(track: Track): StreamInfo? =
+        repository.resolveStreamUrl(track, allowHls = true).getOrNull()
+
+    private fun isHlsStream(stream: StreamInfo): Boolean =
+        stream.mimeType.equals(HLS_MIME, ignoreCase = true) ||
+            stream.url.contains(".m3u8", ignoreCase = true)
+
+    /** Route 2: stitch the HLS playlist into a single offline file. */
+    private suspend fun downloadHls(
+        track: Track,
+        stream: StreamInfo,
+        musicDir: File,
+        baseName: String
+    ): File {
+        val downloaded = hlsDownloader.download(
+            playlistUrl = stream.url,
+            headers = stream.headers,
+            targetDir = musicDir,
+            baseName = baseName,
+            onProgress = { percent ->
+                // Awaited, so progress writes can never land after the COMPLETED write.
+                upsert(track.id, status = "DOWNLOADING", progress = percent.coerceIn(5, 99))
+            }
+        )
+        return downloaded.file
+    }
+
+    /** Route 1: plain single-file download with byte-level progress. */
+    private suspend fun downloadProgressive(
+        track: Track,
+        stream: StreamInfo,
+        musicDir: File,
+        baseName: String
+    ): File = withContext(Dispatchers.IO) {
+        if (!musicDir.exists()) musicDir.mkdirs()
+
+        val extension = when {
+            stream.mimeType?.contains("mpeg", ignoreCase = true) == true -> "mp3"
+            stream.mimeType?.contains("mp4", ignoreCase = true) == true -> "m4a"
+            stream.url.contains(".mp3", ignoreCase = true) -> "mp3"
+            else -> "m4a"
+        }
+        val destinationFile = File(musicDir, "$baseName.$extension")
+
+        // Stream-specific headers win over the baseline ones.
+        val requestHeaders = mutableMapOf(
+            "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
+            "Referer" to "https://soundcloud.com/"
+        )
+        requestHeaders.putAll(stream.headers)
+
+        val request = Request.Builder()
+            .url(stream.url)
+            .apply { requestHeaders.forEach { (name, value) -> addHeader(name, value) } }
+            .build()
+
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw Exception("HTTP error ${response.code}")
+            }
+            val body = response.body ?: throw Exception("Empty response body")
+            val totalBytes = body.contentLength()
+
+            var downloadedBytes = 0L
+            val buffer = ByteArray(8 * 1024)
+            var lastReported = 0
+
+            body.byteStream().use { input ->
+                destinationFile.outputStream().buffered().use { output ->
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        output.write(buffer, 0, read)
+                        downloadedBytes += read
+
+                        if (totalBytes > 0) {
+                            val percent = ((downloadedBytes * 100) / totalBytes).toInt()
+                            if (percent - lastReported >= 5) {
+                                lastReported = percent
+                                upsert(
+                                    track.id,
+                                    status = "DOWNLOADING",
+                                    progress = percent.coerceIn(5, 99),
+                                    totalBytes = totalBytes,
+                                    downloadedBytes = downloadedBytes,
+                                    localFilePath = destinationFile.absolutePath
+                                )
+                            }
+                        }
+                    }
+                    output.flush()
+                }
+            }
+        }
+        destinationFile
     }
 
     fun cancelDownload(trackId: String) {
@@ -208,13 +239,37 @@ class DownloadManager(
         repository.removeDownloadedTrack(trackId)
     }
 
+    private suspend fun upsert(
+        trackId: String,
+        status: String,
+        progress: Int? = null,
+        error: String? = null,
+        totalBytes: Long? = null,
+        downloadedBytes: Long? = null,
+        localFilePath: String? = null
+    ) {
+        val existing = downloadDao.getDownload(trackId)
+        downloadDao.upsertDownload(
+            DownloadEntity(
+                trackId = trackId,
+                status = status,
+                progressPercent = progress ?: existing?.progressPercent ?: 0,
+                errorMessage = error ?: if (status == "DOWNLOADING" || status == "COMPLETED") null else existing?.errorMessage,
+                totalBytes = totalBytes ?: existing?.totalBytes,
+                downloadedBytes = downloadedBytes ?: existing?.downloadedBytes,
+                localFilePath = localFilePath ?: existing?.localFilePath
+            )
+        )
+    }
+
+    private fun sanitize(name: String): String =
+        name.replace(Regex("[^a-zA-Z0-9.-]"), "_").take(80)
+
     private fun cleanupPartialFile(trackId: String) {
         try {
             val musicDir = File(context.filesDir, "downloads")
             musicDir.listFiles()?.forEach { file ->
-                if (file.name.startsWith(trackId)) {
-                    file.delete()
-                }
+                if (file.name.startsWith(trackId)) file.delete()
             }
         } catch (e: Exception) {
             Log.w(TAG, "Cleanup failed: ${e.message}")
@@ -223,5 +278,8 @@ class DownloadManager(
 
     companion object {
         private const val TAG = "DownloadManager"
+
+        /** Must match media3's MimeTypes.APPLICATION_M3U8 exactly. */
+        private const val HLS_MIME = "application/x-mpegURL"
     }
 }
