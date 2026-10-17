@@ -135,15 +135,24 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          gradle lintVitalRelease --stacktrace > lint.log 2>&1
-          echo "lint task exit: $?"
+          : > lint-issues.txt
+
+          # Preferred: the full lint task writes app/build/reports/lint-results-release.xml.
+          gradle lintRelease --stacktrace > lint.log 2>&1
+          echo "lintRelease exit: $?"
+
+          if [ -z "$(find . -name 'lint-results*.xml' -not -path './.gradle/*' 2>/dev/null | head -n 1)" ]; then
+            # Fall back to the original failing path: assembleRelease itself runs
+            # lintVitalRelease, which is what blocked the first signed build.
+            gradle assembleRelease --stacktrace > lint2.log 2>&1
+            echo "assembleRelease exit: $?"
+          fi
 
           echo "===== candidate lint report files ====="
           REPORTS="$(find . -name 'lint-results*' -not -path './.gradle/*' -not -path './dist/*' 2>/dev/null | head -10)"
           echo "${REPORTS:-<none found>}"
 
           PY="$(command -v python3 || command -v python || true)"
-          : > lint-issues.txt
           if [ -n "$PY" ] && [ -n "$REPORTS" ]; then
             for r in $REPORTS; do
               case "$r" in
@@ -161,8 +170,9 @@ jobs:
               [ -n "$line" ] && echo "::error::$line"
             done
           else
-            echo "::warning::no lint findings could be extracted - dumping lint.log tail"
-            tail -c 4000 lint.log | sed 's/^/::error::LINTLOG /' | head -30
+            echo "::warning::no lint findings extracted - dumping failure diagnostics"
+            awk '/What went wrong/{f=1} f' lint.log lint2.log 2>/dev/null | head -22 | sed 's/^/::error::DIAG /'
+            grep -nE "Task '.*' not found|FAILED|Lint found" lint.log lint2.log 2>/dev/null | head -8 | sed 's/^/::error::DIAG2 /'
           fi
           exit 0
 
