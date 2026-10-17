@@ -87,10 +87,7 @@ jobs:
           set +e
           if [ "${{ steps.signing.outputs.mode }}" = "release" ]; then
             export KEYSTORE_PATH="$GITHUB_WORKSPACE/release.keystore"
-            # -x lintVitalRelease: lintVital is a fatal-only lint pass that runs inside
-            # assembleRelease and would otherwise block publishing. Its findings are
-            # reported non-blockingly by the "Report fatal lint issues" step below.
-            gradle assembleRelease -x lintVitalRelease --stacktrace > build.log 2>&1
+            gradle assembleRelease --stacktrace > build.log 2>&1
             STATUS=$?
             SRC="app/build/outputs/apk/release/app-release.apk"
           else
@@ -119,60 +116,50 @@ jobs:
         if: failure()
         run: |
           if [ -f build.log ]; then
-            grep -E "^e: |e: file|error:|What went wrong|Execution failed for task|Caused by: " build.log \
+            grep -iE "^e: |e: file|error:|What went wrong|Execution failed for task|Caused by: " build.log \
               | head -15 \
               | while IFS= read -r line; do
                   echo "::error::${line//$'\n'/ }"
                 done
           fi
 
-      # lintVitalRelease is excluded from assembleRelease above so that a lint finding cannot
-      # block publishing. Re-run that exact task here and surface its Fatal/Error findings as
-      # annotations, which is the only channel readable without GitHub auth.
-      # This step never fails the workflow.
-      - name: Report fatal lint issues (non-blocking)
-        if: steps.signing.outputs.mode == 'release'
+      # lintVitalRelease now blocks release builds again (see app/lint.xml for the one
+      # documented false positive). This step only runs when something already failed, so it
+      # costs nothing on a green build, and it surfaces the lint report as annotations - the
+      # only failure channel readable without GitHub auth.
+      - name: Report lint findings (failure path)
+        if: failure() && steps.signing.outputs.mode == 'release'
         continue-on-error: true
         run: |
           set +e
           : > lint-issues.txt
 
-          # Preferred: the full lint task writes app/build/reports/lint-results-release.xml.
-          gradle lintRelease --stacktrace > lint.log 2>&1
-          echo "lintRelease exit: $?"
-
           if [ -z "$(find . -name 'lint-results*.xml' -not -path './.gradle/*' 2>/dev/null | head -n 1)" ]; then
-            # Fall back to the original failing path: assembleRelease itself runs
-            # lintVitalRelease, which is what blocked the first signed build.
-            gradle assembleRelease --stacktrace > lint2.log 2>&1
-            echo "assembleRelease exit: $?"
+            gradle lintRelease --stacktrace > lint.log 2>&1
           fi
 
-          echo "===== candidate lint report files ====="
-          REPORTS="$(find . -name 'lint-results*' -not -path './.gradle/*' -not -path './dist/*' 2>/dev/null | head -10)"
-          echo "${REPORTS:-<none found>}"
+          REPORTS="$(find . -name 'lint-results*.xml' -not -path './.gradle/*' -not -path './dist/*' 2>/dev/null | head -10)"
+          echo "lint reports: ${REPORTS:-<none found>}"
 
           PY="$(command -v python3 || command -v python || true)"
           if [ -n "$PY" ] && [ -n "$REPORTS" ]; then
             for r in $REPORTS; do
-              case "$r" in
-                *.xml) "$PY" .github/scripts/lint_issues.py "$r" >> lint-issues.txt ;;
-              esac
+              "$PY" .github/scripts/lint_issues.py "$r" >> lint-issues.txt
             done
+            [ -s lint-issues.txt ] && sort -u lint-issues.txt -o lint-issues.txt
           fi
-          [ -s lint-issues.txt ] && sort -u lint-issues.txt -o lint-issues.txt
 
           if [ -s lint-issues.txt ]; then
             echo "===== FATAL / ERROR LINT ISSUES ====="
-            head -40 lint-issues.txt
-            echo "----- total: $(wc -l < lint-issues.txt) -----"
-            head -40 lint-issues.txt | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::$line"
+            head -30 lint-issues.txt
+            head -30 lint-issues.txt | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::LINT $line"
             done
           else
-            echo "::warning::no lint findings extracted - dumping failure diagnostics"
-            awk '/What went wrong/{f=1} f' lint.log lint2.log 2>/dev/null | head -22 | sed 's/^/::error::DIAG /'
-            grep -nE "Task '.*' not found|FAILED|Lint found" lint.log lint2.log 2>/dev/null | head -8 | sed 's/^/::error::DIAG2 /'
+            echo "::warning::could not extract lint findings"
+            if [ -f lint.log ]; then
+              awk '/What went wrong/{f=1} f' lint.log | head -15 | sed 's/^/::error::DIAG /'
+            fi
           fi
           exit 0
 
