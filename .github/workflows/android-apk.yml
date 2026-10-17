@@ -87,7 +87,10 @@ jobs:
           set +e
           if [ "${{ steps.signing.outputs.mode }}" = "release" ]; then
             export KEYSTORE_PATH="$GITHUB_WORKSPACE/release.keystore"
-            gradle assembleRelease --stacktrace > build.log 2>&1
+            # -x lintVitalRelease: lintVital is a fatal-only lint pass that runs inside
+            # assembleRelease and would otherwise block publishing. Its findings are
+            # reported non-blockingly by the "Report fatal lint issues" step below.
+            gradle assembleRelease -x lintVitalRelease --stacktrace > build.log 2>&1
             STATUS=$?
             SRC="app/build/outputs/apk/release/app-release.apk"
           else
@@ -122,6 +125,40 @@ jobs:
                   echo "::error::${line//$'\n'/ }"
                 done
           fi
+
+      # lintVitalRelease is excluded from assembleRelease above so that a lint finding cannot
+      # block publishing. Re-run that exact task here and surface its Fatal/Error findings as
+      # annotations, which is the only channel readable without GitHub auth.
+      # This step never fails the workflow.
+      - name: Report fatal lint issues (non-blocking)
+        if: steps.signing.outputs.mode == 'release'
+        continue-on-error: true
+        run: |
+          set +e
+          gradle lintVitalRelease --stacktrace > lint.log 2>&1
+          REPORT="$(ls -1 app/build/reports/lint-results*.xml 2>/dev/null | head -n 1)"
+          if [ -z "$REPORT" ]; then
+            echo "::warning::no lint XML report was produced"
+            tail -n 30 lint.log
+            exit 0
+          fi
+          echo "lint report: $REPORT"
+
+          PY="$(command -v python3 || command -v python || true)"
+          if [ -z "$PY" ]; then
+            echo "::warning::no python available to parse $REPORT"
+            exit 0
+          fi
+
+          "$PY" .github/scripts/lint_issues.py "$REPORT" > lint-issues.txt 2>&1
+          echo "===== FATAL / ERROR LINT ISSUES ====="
+          head -40 lint-issues.txt
+          echo "----- total: $(wc -l < lint-issues.txt) -----"
+
+          head -40 lint-issues.txt | while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error::$line"
+          done
+          exit 0
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
