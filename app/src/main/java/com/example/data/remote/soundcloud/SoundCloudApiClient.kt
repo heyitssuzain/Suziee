@@ -46,8 +46,8 @@ import kotlin.math.abs
 class SoundCloudApiClient {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -382,6 +382,12 @@ class SoundCloudApiClient {
                 val head = String(buffer, 0, read, Charsets.ISO_8859_1)
                 if (stream.mimeType == HLS_MIME) head.startsWith("#EXTM3U") else !head.startsWith("#EXTM3U")
             }
+        } catch (e: java.net.SocketTimeoutException) {
+            // Slow network, not a bad URL: accept optimistically so a genuinely playable
+            // stream is not rejected just because our probe timed out. ExoPlayer will hit
+            // the same URL with a longer read window and can still succeed.
+            Log.w(TAG, "Verification timed out - accepting optimistically")
+            true
         } catch (e: Exception) {
             Log.w(TAG, "Verification error: ${e.message}")
             false

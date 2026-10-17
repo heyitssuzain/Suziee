@@ -1,6 +1,7 @@
 package com.example.ui.downloads
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.PlayArrow
@@ -189,8 +191,74 @@ fun DownloadsScreen(
             }
         }
 
+        // Failed downloads: recoverable, shown with a retry action.
+        val failedDownloads = activeDownloads.filter { it.status == "FAILED" }
+        if (failedDownloads.isNotEmpty()) {
+            item {
+                Text(
+                    text = "FAILED DOWNLOADS",
+                    color = SuzieeAccentSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp,
+                    modifier = Modifier.padding(vertical = 6.dp)
+                )
+            }
+
+            items(failedDownloads, key = { "failed_${it.trackId}" }) { d ->
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clip(RoundedCornerShape(10.dp)),
+                    color = SuzieeSurfaceCard,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Couldn't download this track",
+                            color = SuzieeTextPrimary,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = d.errorMessage ?: "Network error",
+                            color = SuzieeTextMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Retry",
+                                color = SuzieeAccentSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { downloadManager.retryDownload(d.trackId) }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                            IconButton(onClick = {
+                                scope.launch { downloadManager.dismissFailedDownload(d.trackId) }
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss",
+                                    tint = SuzieeTextMuted
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Downloaded tracks list
-        if (downloadedTracks.isEmpty() && pendingDownloads.isEmpty()) {
+        if (downloadedTracks.isEmpty() && pendingDownloads.isEmpty() && failedDownloads.isEmpty()) {
             item {
                 Column(
                     modifier = Modifier

@@ -34,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -172,7 +173,19 @@ class MusicPlayerManager(
     /** Guards the SoundCloud failover so we only escalate once per track. */
     private var soundCloudTriedForCurrentTrack = false
 
+    /** Guards the "one automatic re-resolve after a mid-playback error" behaviour. */
+    private var transientRetryUsed = false
+
+    /** Mirrors the user's "Autoplay Next Track" preference (defaults to on). */
+    private var autoplayEnabled = true
+
     init {
+        // Track the autoplay preference so `handlePlaybackEnded` can honour it. Read once
+        // here and kept up to date by the collector; cheap and never blocks the UI.
+        scope.launch {
+            preferences.isAutoplayEnabled.collect { autoplayEnabled = it }
+        }
+
         exoPlayer.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _playbackState.update { it.copy(isPlaying = isPlaying) }
@@ -211,30 +224,47 @@ class MusicPlayerManager(
                 Log.e(TAG, "ExoPlayer error: ${error.message}", error)
 
                 val track = _playbackState.value.currentTrack
+                if (track == null) {
+                    failPlayback(error)
+                    return
+                }
 
                 // Failover trigger #2 from the spec ("persistent playback error"):
                 // a sniffed YouTube URL can go stale - signatures expire and SABR chunks
                 // end mid-stream. Rather than dead-ending on an error, silently re-resolve
                 // this one track through SoundCloud. Guarded so we only escalate once.
-                if (track != null &&
-                    currentSource == StreamSource.YOUTUBE_SNIFFER &&
-                    !soundCloudTriedForCurrentTrack
-                ) {
+                if (currentSource == StreamSource.YOUTUBE_SNIFFER && !soundCloudTriedForCurrentTrack) {
                     Log.w(TAG, "YouTube stream failed mid-playback - switching to SoundCloud fallback")
                     soundCloudTriedForCurrentTrack = true
                     failoverToSoundCloud(track)
                     return
                 }
 
-                _playbackState.update {
-                    it.copy(
-                        isLoading = false,
-                        isPlaying = false,
-                        errorMessage = "Playback failed: ${error.localizedMessage ?: "Unknown media error"}"
-                    )
+                // A SoundCloud stream can also drop on a flaky connection. One automatic
+                // re-resolve (which now retries internally) turns a transient network
+                // hiccup into a short buffering pause instead of an error message.
+                if (currentSource == StreamSource.SOUNDCLOUD && !transientRetryUsed) {
+                    Log.w(TAG, "SoundCloud stream error - one automatic re-resolve")
+                    transientRetryUsed = true
+                    failoverToSoundCloud(track)
+                    return
                 }
+
+                failPlayback(error)
             }
         })
+    }
+
+    /** Surfaces a genuine, user-facing playback failure (after every retry was spent). */
+    private fun failPlayback(error: PlaybackException?) {
+        _playbackState.update {
+            it.copy(
+                isLoading = false,
+                isPlaying = false,
+                errorMessage = "Couldn't play this track. Check your connection and tap retry."
+            )
+        }
+        Log.e(TAG, "Playback failed: ${error?.localizedMessage}")
     }
 
     /**
@@ -303,6 +333,7 @@ class MusicPlayerManager(
         // (including a WebView that may still be sniffing) and reset the failover guard.
         resolveJob?.cancel()
         soundCloudTriedForCurrentTrack = false
+        transientRetryUsed = false
         currentSource = StreamSource.NONE
 
         resolveJob = scope.launch {
@@ -334,7 +365,7 @@ class MusicPlayerManager(
                         it.copy(
                             isLoading = false,
                             isPlaying = false,
-                            errorMessage = "Couldn't play this track. Tap retry or pick another song."
+                            errorMessage = "Couldn't play this track. Check your connection and tap retry."
                         )
                     }
                     return@launch
@@ -364,7 +395,18 @@ class MusicPlayerManager(
     private suspend fun resolveRemoteStream(track: Track, useSniffer: Boolean): StreamInfo? {
         if (useSniffer && looksLikeYouTubeVideoId(track.id)) {
             Log.i(TAG, "PRIMARY: sniffing YouTube via headless WebView (${track.id})")
-            val sniffed = YouTubeWebViewSniffer(context).sniff(track.id)
+            // CRITICAL for cross-device reliability: a WebView that is missing, disabled or
+            // outdated (very common on a friend's phone) throws while being constructed. If
+            // that exception escaped, the SoundCloud fallback below would never run and the
+            // user would see "Could not play this track" even though a stream was available.
+            val sniffed = try {
+                YouTubeWebViewSniffer(context).sniff(track.id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Sniffer unavailable on this device (${e.message}) - using fallback")
+                null
+            }
             if (sniffed != null) {
                 currentSource = StreamSource.YOUTUBE_SNIFFER
                 Log.i(TAG, "Sniffer captured a ${sniffed.mimeType ?: "media"} stream")
@@ -377,13 +419,37 @@ class MusicPlayerManager(
             )
         }
 
-        val soundCloud = repository.resolveStreamUrl(track).getOrNull()
-        if (soundCloud != null && soundCloud.url.isNotBlank()) {
-            currentSource = StreamSource.SOUNDCLOUD
-            Log.i(TAG, "FALLBACK: playing SoundCloud stream")
-            return soundCloud
-        }
+        return resolveSoundCloudWithRetry(track)
+    }
 
+    /**
+     * SoundCloud fallback with a few retries and backoff.
+     *
+     * Resolving is a handful of small HTTP calls, so retrying is cheap and it means a slow
+     * or briefly flaky connection produces a slightly longer "buffering" state instead of
+     * an immediate failure.
+     */
+    private suspend fun resolveSoundCloudWithRetry(track: Track): StreamInfo? {
+        for (attempt in 0 until SOUNDCLOUD_ATTEMPTS) {
+            val stream = try {
+                repository.resolveStreamUrl(track).getOrNull()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "SoundCloud resolve attempt ${attempt + 1} failed: ${e.message}")
+                null
+            }
+
+            if (stream != null && stream.url.isNotBlank()) {
+                currentSource = StreamSource.SOUNDCLOUD
+                Log.i(TAG, "FALLBACK: playing SoundCloud stream")
+                return stream
+            }
+
+            if (attempt < SOUNDCLOUD_ATTEMPTS - 1) {
+                delay(SOUNDCLOUD_RETRY_BACKOFF_MS * (attempt + 1))
+            }
+        }
         return null
     }
 
@@ -403,7 +469,7 @@ class MusicPlayerManager(
                         it.copy(
                             isLoading = false,
                             isPlaying = false,
-                            errorMessage = "Couldn't play this track. Tap retry or pick another song."
+                            errorMessage = "Couldn't play this track. Check your connection and tap retry."
                         )
                     }
                     return@launch
@@ -418,7 +484,7 @@ class MusicPlayerManager(
                     it.copy(
                         isLoading = false,
                         isPlaying = false,
-                        errorMessage = "Playback failed: ${e.localizedMessage ?: "Unknown error"}"
+                        errorMessage = "Couldn't play this track. Check your connection and tap retry."
                     )
                 }
             }
@@ -487,10 +553,37 @@ class MusicPlayerManager(
         } catch (e: Exception) {
             Log.w(TAG, "retry: reset failed: ${e.message}")
         }
-        // A manual retry may pick a different source, so clear the failover guard too.
+        // A manual retry may pick a different source, so clear the failover guards too.
         soundCloudTriedForCurrentTrack = false
+        transientRetryUsed = false
         currentSource = StreamSource.NONE
         _playbackState.update { it.copy(errorMessage = null, isLoading = true) }
+        resolveAndStartPlayback(track)
+    }
+
+    /**
+     * Aborts an in-flight resolve/load and returns the player to an idle (not-error) state.
+     * Wired to the "Cancel" affordance shown while a track is buffering/resolving.
+     */
+    fun cancelPlayback() {
+        try {
+            resolveJob?.cancel()
+        } catch (e: Exception) {
+            Log.w(TAG, "cancel: job cancel failed: ${e.message}")
+        }
+        resolveJob = null
+        try {
+            exoPlayer.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "cancel: stop failed: ${e.message}")
+        }
+        _playbackState.update { it.copy(isLoading = false, isPlaying = false, errorMessage = null) }
+    }
+
+    /** Moves the queue cursor to [index] and starts that track. */
+    private fun switchToIndex(index: Int) {
+        val track = _playbackState.value.queue.getOrNull(index) ?: return
+        _playbackState.update { it.copy(currentIndex = index, currentTrack = track) }
         resolveAndStartPlayback(track)
     }
 
@@ -498,29 +591,26 @@ class MusicPlayerManager(
         val state = _playbackState.value
         if (state.queue.isEmpty()) return
         val nextIndex = state.currentIndex + 1
-        if (nextIndex < state.queue.size) {
-            val nextTrack = state.queue[nextIndex]
-            _playbackState.update { it.copy(currentIndex = nextIndex, currentTrack = nextTrack) }
-            resolveAndStartPlayback(nextTrack)
-        } else if (state.repeatMode == RepeatMode.ALL) {
-            val firstTrack = state.queue.first()
-            _playbackState.update { it.copy(currentIndex = 0, currentTrack = firstTrack) }
-            resolveAndStartPlayback(firstTrack)
+        when {
+            nextIndex < state.queue.size -> switchToIndex(nextIndex)
+            // Repeat ALL (or manual Next while repeat is on) wraps to the start of the queue.
+            state.repeatMode != RepeatMode.OFF -> switchToIndex(0)
+            // End of the queue with no repeat: keep the finished track loaded and idle.
+            else -> _playbackState.update { it.copy(isPlaying = false) }
         }
     }
 
     fun playPrevious() {
         val state = _playbackState.value
         if (state.queue.isEmpty()) return
+        // Standard behaviour: more than 3s into the song restarts it instead of skipping back.
         if (exoPlayer.currentPosition > 3000L) {
             exoPlayer.seekTo(0)
             return
         }
         val prevIndex = state.currentIndex - 1
         if (prevIndex >= 0) {
-            val prevTrack = state.queue[prevIndex]
-            _playbackState.update { it.copy(currentIndex = prevIndex, currentTrack = prevTrack) }
-            resolveAndStartPlayback(prevTrack)
+            switchToIndex(prevIndex)
         } else {
             exoPlayer.seekTo(0)
         }
@@ -562,11 +652,11 @@ class MusicPlayerManager(
             RepeatMode.ALL -> RepeatMode.ONE
             RepeatMode.ONE -> RepeatMode.OFF
         }
-        exoPlayer.repeatMode = when (nextRepeat) {
-            RepeatMode.OFF -> Player.REPEAT_MODE_OFF
-            RepeatMode.ALL -> Player.REPEAT_MODE_ALL
-            RepeatMode.ONE -> Player.REPEAT_MODE_ONE
-        }
+        // ExoPlayer is kept at REPEAT_MODE_OFF on purpose. We only ever load ONE media item
+        // at a time, so letting ExoPlayer itself repeat would make "Repeat All" silently
+        // loop the current track forever (and auto-advance would never run). Repeat is
+        // handled manually in `handlePlaybackEnded` / `playNext` instead.
+        exoPlayer.repeatMode = Player.REPEAT_MODE_OFF
         _playbackState.update { it.copy(repeatMode = nextRepeat) }
     }
 
@@ -612,15 +702,31 @@ class MusicPlayerManager(
     }
 
     private fun handlePlaybackEnded() {
-        when (_playbackState.value.repeatMode) {
-            RepeatMode.ONE -> {
-                exoPlayer.seekTo(0)
-                exoPlayer.playWhenReady = true
-            }
-            else -> {
-                playNext()
-            }
+        val state = _playbackState.value
+
+        // Repeat ONE: replay the current track. ExoPlayer's own repeat is OFF, so this is
+        // the only place it can happen.
+        if (state.repeatMode == RepeatMode.ONE) {
+            exoPlayer.seekTo(0)
+            exoPlayer.playWhenReady = true
+            return
         }
+
+        // Honour the "Autoplay Next Track" setting instead of always advancing.
+        if (!autoplayEnabled) {
+            Log.i(TAG, "Track ended; autoplay is disabled - stopping")
+            _playbackState.update { it.copy(isPlaying = false) }
+            return
+        }
+
+        // End of the queue without repeat: stop cleanly instead of looping or erroring.
+        if (state.currentIndex >= state.queue.lastIndex && state.repeatMode != RepeatMode.ALL) {
+            Log.i(TAG, "Playlist finished")
+            _playbackState.update { it.copy(isPlaying = false) }
+            return
+        }
+
+        playNext()
     }
 
     private fun startProgressTracker() {
@@ -668,5 +774,11 @@ class MusicPlayerManager(
 
     companion object {
         private const val TAG = "MusicPlayerManager"
+
+        /** How many times the cheap SoundCloud fallback is retried before giving up. */
+        private const val SOUNDCLOUD_ATTEMPTS = 3
+
+        /** Linear backoff between SoundCloud attempts (attempt 1 waits 900ms, etc.). */
+        private const val SOUNDCLOUD_RETRY_BACKOFF_MS = 900L
     }
 }

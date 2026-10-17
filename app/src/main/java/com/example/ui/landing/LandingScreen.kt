@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -124,7 +125,10 @@ fun LandingScreen(
                 painter = painterResource(id = R.drawable.img_suziee_hero),
                 contentDescription = "Suziee Character Artwork",
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                // Bias the crop slightly above centre so the character's face stays framed
+                // on tall and wide screens alike.
+                alignment = Alignment(0.5f, 0.4f)
             )
 
             // Deep gradient overlay ensuring text readability and cyberpunk atmosphere
@@ -140,6 +144,50 @@ fun LandingScreen(
                                 SuzieeBgPrimary
                             )
                         )
+                    )
+            )
+        }
+
+        // Cinematic ambient light + vignette, layered above the artwork.
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(Color.Transparent, SuzieeBgPrimary.copy(alpha = 0.85f)),
+                            radius = 1400f
+                        )
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = (-80).dp, y = 80.dp)
+                    .size(280.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                SuzieeAccentPrimary.copy(alpha = 0.30f * glowPhase),
+                                Color.Transparent
+                            )
+                        ),
+                        shape = CircleShape
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 90.dp, y = 60.dp)
+                    .size(320.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                SuzieeAccentSecondary.copy(alpha = 0.22f * glowPhase),
+                                Color.Transparent
+                            )
+                        ),
+                        shape = CircleShape
                     )
             )
         }

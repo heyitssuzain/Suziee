@@ -12,6 +12,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -90,11 +91,7 @@ class DownloadManager(
                 val musicDir = File(context.filesDir, "downloads")
                 val baseName = "${track.id}_${sanitize(track.title)}"
 
-                val finished: File = if (isHlsStream(streamInfo)) {
-                    downloadHls(track, streamInfo, musicDir, baseName)
-                } else {
-                    downloadProgressive(track, streamInfo, musicDir, baseName)
-                }
+                val finished: File = performDownloadWithRetry(track, streamInfo, musicDir, baseName)
 
                 val size = if (finished.exists()) finished.length() else 0L
                 upsert(
@@ -129,6 +126,37 @@ class DownloadManager(
      */
     private suspend fun resolveForDownload(track: Track): StreamInfo? =
         repository.resolveStreamUrl(track, allowHls = true).getOrNull()
+
+    /**
+     * Routes to the progressive or HLS path and retries the *whole* download once on a
+     * transient failure (timeout / dropped connection). Partial files from the failed
+     * attempt are removed first so we never append onto a corrupt half-file.
+     */
+    private suspend fun performDownloadWithRetry(
+        track: Track,
+        streamInfo: StreamInfo,
+        musicDir: File,
+        baseName: String
+    ): File {
+        var attempt = 0
+        while (true) {
+            try {
+                return if (isHlsStream(streamInfo)) {
+                    downloadHls(track, streamInfo, musicDir, baseName)
+                } else {
+                    downloadProgressive(track, streamInfo, musicDir, baseName)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                attempt++
+                if (attempt >= MAX_DOWNLOAD_ATTEMPTS) throw e
+                Log.w(TAG, "Download attempt $attempt failed (${e.message}) - retrying")
+                cleanupPartialFile(track.id)
+                delay(RETRY_BACKOFF_MS * attempt)
+            }
+        }
+    }
 
     private fun isHlsStream(stream: StreamInfo): Boolean =
         stream.mimeType.equals(HLS_MIME, ignoreCase = true) ||
@@ -230,6 +258,26 @@ class DownloadManager(
         cleanupPartialFile(trackId)
     }
 
+    /**
+     * Re-runs a previously failed download. The Track is reloaded from the database so the
+     * caller only needs the id (which is all the downloads screen has).
+     */
+    fun retryDownload(trackId: String) {
+        scope.launch {
+            val entity = runCatching { database.trackDao().getTrackById(trackId) }.getOrNull()
+            if (entity == null) {
+                upsert(trackId, status = "FAILED", error = "Track is no longer available")
+                return@launch
+            }
+            downloadTrack(entity.toDomain())
+        }
+    }
+
+    /** Clears a failed/queued download row without touching the library or playlists. */
+    suspend fun dismissFailedDownload(trackId: String) {
+        downloadDao.deleteDownload(trackId)
+    }
+
     suspend fun deleteDownload(trackId: String) = withContext(Dispatchers.IO) {
         val download = downloadDao.getDownload(trackId)
         if (download?.localFilePath != null) {
@@ -281,5 +329,10 @@ class DownloadManager(
 
         /** Must match media3's MimeTypes.APPLICATION_M3U8 exactly. */
         private const val HLS_MIME = "application/x-mpegURL"
+
+        /** Total tries for one download (initial + retries) before it is marked FAILED. */
+        private const val MAX_DOWNLOAD_ATTEMPTS = 2
+
+        private const val RETRY_BACKOFF_MS = 1_500L
     }
 }

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -60,6 +61,7 @@ fun SettingsScreen(
     preferences: SuzieePreferences,
     repository: MusicRepository,
     onBack: () -> Unit,
+    onReplayIntro: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isReducedMotion by preferences.isReducedMotion.collectAsState(initial = false)
@@ -101,25 +103,41 @@ fun SettingsScreen(
             item {
                 SettingsSectionHeader("APPEARANCE")
                 SettingsCard {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Animation, contentDescription = null, tint = SuzieeAccentSecondary)
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Animation, contentDescription = null, tint = SuzieeAccentSecondary)
+                                Column(modifier = Modifier.padding(start = 12.dp)) {
+                                    Text("Reduced Motion", color = SuzieeTextPrimary, fontWeight = FontWeight.Medium)
+                                    Text("Skip intro animations and reduce dynamic motion", color = SuzieeTextSecondary, fontSize = 12.sp)
+                                }
+                            }
+                            Switch(
+                                checked = isReducedMotion,
+                                onCheckedChange = { scope.launch { preferences.setReducedMotion(it) } },
+                                colors = SwitchDefaults.colors(checkedThumbColor = SuzieeBgPrimary, checkedTrackColor = SuzieeAccentPrimary)
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onReplayIntro() }
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Movie, contentDescription = null, tint = SuzieeAccentPrimary)
                             Column(modifier = Modifier.padding(start = 12.dp)) {
-                                Text("Reduced Motion", color = SuzieeTextPrimary, fontWeight = FontWeight.Medium)
-                                Text("Skip intro animations and reduce dynamic motion", color = SuzieeTextSecondary, fontSize = 12.sp)
+                                Text("Replay Cinematic Intro", color = SuzieeTextPrimary, fontWeight = FontWeight.Medium)
+                                Text("Watch the animated Suziee opening again", color = SuzieeTextSecondary, fontSize = 12.sp)
                             }
                         }
-                        Switch(
-                            checked = isReducedMotion,
-                            onCheckedChange = { scope.launch { preferences.setReducedMotion(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = SuzieeBgPrimary, checkedTrackColor = SuzieeAccentPrimary)
-                        )
                     }
                 }
             }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MoreVert
@@ -59,6 +60,11 @@ fun TrackRowItem(
     onAddToPlaylist: (() -> Unit)? = null,
     onAddToQueue: (() -> Unit)? = null,
     onDownload: (() -> Unit)? = null,
+    /**
+     * Shown as "Remove from Playlist" in the overflow menu. Only supplied by playlist
+     * detail views, so removing a song here never touches the shared library entry.
+     */
+    onRemoveFromPlaylist: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -211,6 +217,17 @@ fun TrackRowItem(
                             showMenu = false
                             onDownload()
                         }
+                    )
+                }
+                if (onRemoveFromPlaylist != null) {
+                    DropdownMenuItem(
+                        text = { Text("Remove from Playlist") },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        onClick = {
+                            showMenu = false
+                            onRemoveFromPlaylist()
+                        },
+                        modifier = Modifier.testTag("remove_from_playlist_${track.id}")
                     )
                 }
             }

@@ -173,6 +173,10 @@ fun SuzieeApp(
             preferences = app.preferences,
             repository = playerManager.repository,
             onBack = { showSettingsScreen = false },
+            onReplayIntro = {
+                showSettingsScreen = false
+                showLanding = true
+            },
             modifier = Modifier.statusBarsPadding()
         )
         return
@@ -192,6 +196,7 @@ fun SuzieeApp(
                         onExpandPlayer = { showPlayerFullScreen = true },
                         onTogglePlayPause = { playerManager.togglePlayPause() },
                         onSkipNext = { playerManager.playNext() },
+                        onSkipPrevious = { playerManager.playPrevious() },
                         onRetry = { playerManager.retryCurrent() }
                     )
                 }

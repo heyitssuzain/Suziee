@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +51,7 @@ fun MiniPlayerBar(
     onExpandPlayer: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
+    onSkipPrevious: () -> Unit = {},
     onRetry: () -> Unit = onTogglePlayPause,
     modifier: Modifier = Modifier
 ) {
@@ -131,6 +133,19 @@ fun MiniPlayerBar(
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                // Previous track
+                IconButton(
+                    onClick = onSkipPrevious,
+                    modifier = Modifier.testTag("mini_prev_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipPrevious,
+                        contentDescription = "Previous Track",
+                        tint = SuzieeTextPrimary,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 

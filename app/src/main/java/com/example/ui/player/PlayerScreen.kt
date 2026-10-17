@@ -61,6 +61,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -532,6 +533,20 @@ fun PlayerScreen(
                         imageVector = if (playbackState.repeatMode == PlaybackRepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
                         contentDescription = "Repeat",
                         tint = if (playbackState.repeatMode != PlaybackRepeatMode.OFF) SuzieeAccentSecondary else SuzieeTextMuted
+                    )
+                }
+            }
+
+            // While resolving/buffering the user can wait, pick another track, or cancel.
+            if (playbackState.isLoading) {
+                TextButton(
+                    onClick = { playerManager.cancelPlayback() },
+                    modifier = Modifier.testTag("player_cancel_button")
+                ) {
+                    Text(
+                        text = "Cancel",
+                        color = SuzieeTextSecondary,
+                        fontSize = 13.sp
                     )
                 }
             }
