@@ -136,28 +136,34 @@ jobs:
         run: |
           set +e
           gradle lintVitalRelease --stacktrace > lint.log 2>&1
-          REPORT="$(ls -1 app/build/reports/lint-results*.xml 2>/dev/null | head -n 1)"
-          if [ -z "$REPORT" ]; then
-            echo "::warning::no lint XML report was produced"
-            tail -n 30 lint.log
-            exit 0
-          fi
-          echo "lint report: $REPORT"
+          echo "lint task exit: $?"
+
+          echo "===== candidate lint report files ====="
+          REPORTS="$(find . -name 'lint-results*' -not -path './.gradle/*' -not -path './dist/*' 2>/dev/null | head -10)"
+          echo "${REPORTS:-<none found>}"
 
           PY="$(command -v python3 || command -v python || true)"
-          if [ -z "$PY" ]; then
-            echo "::warning::no python available to parse $REPORT"
-            exit 0
+          : > lint-issues.txt
+          if [ -n "$PY" ] && [ -n "$REPORTS" ]; then
+            for r in $REPORTS; do
+              case "$r" in
+                *.xml) "$PY" .github/scripts/lint_issues.py "$r" >> lint-issues.txt ;;
+              esac
+            done
           fi
+          [ -s lint-issues.txt ] && sort -u lint-issues.txt -o lint-issues.txt
 
-          "$PY" .github/scripts/lint_issues.py "$REPORT" > lint-issues.txt 2>&1
-          echo "===== FATAL / ERROR LINT ISSUES ====="
-          head -40 lint-issues.txt
-          echo "----- total: $(wc -l < lint-issues.txt) -----"
-
-          head -40 lint-issues.txt | while IFS= read -r line; do
-            [ -n "$line" ] && echo "::error::$line"
-          done
+          if [ -s lint-issues.txt ]; then
+            echo "===== FATAL / ERROR LINT ISSUES ====="
+            head -40 lint-issues.txt
+            echo "----- total: $(wc -l < lint-issues.txt) -----"
+            head -40 lint-issues.txt | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::$line"
+            done
+          else
+            echo "::warning::no lint findings could be extracted - dumping lint.log tail"
+            tail -c 4000 lint.log | sed 's/^/::error::LINTLOG /' | head -30
+          fi
           exit 0
 
       - name: Upload APK
