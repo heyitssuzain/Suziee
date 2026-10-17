@@ -62,15 +62,50 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
-      - name: Build debug APK
+      # If the private release keystore has been added as a repository secret, decode it and
+      # sign a *release* build with it. Until then we keep building debug so the workflow
+      # still produces a downloadable APK instead of going red.
+      - name: Prepare signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/release.keystore"
+            echo "mode=release" >> "$GITHUB_OUTPUT"
+            echo "Signing with the private release keystore from repository secrets."
+          else
+            echo "mode=debug" >> "$GITHUB_OUTPUT"
+            echo "::warning::KEYSTORE_BASE64 is not set - falling back to a debug-signed build."
+          fi
+
+      - name: Build APK
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set +e
-          gradle assembleDebug --stacktrace > build.log 2>&1
-          STATUS=$?
+          if [ "${{ steps.signing.outputs.mode }}" = "release" ]; then
+            export KEYSTORE_PATH="$GITHUB_WORKSPACE/release.keystore"
+            gradle assembleRelease --stacktrace > build.log 2>&1
+            STATUS=$?
+            SRC="app/build/outputs/apk/release/app-release.apk"
+          else
+            gradle assembleDebug --stacktrace > build.log 2>&1
+            STATUS=$?
+            SRC="app/build/outputs/apk/debug/app-debug.apk"
+          fi
+
           echo "===== COMPILE / GRADLE ERRORS ====="
           grep -E "^e: |e: file|error:|What went wrong|Execution failed for task|Caused by: " build.log | head -40 || true
           echo "===== TAIL ====="
           tail -n 45 build.log
+
+          if [ $STATUS -eq 0 ]; then
+            mkdir -p dist
+            cp "$SRC" dist/Suziee.apk
+            echo "Packaged $SRC -> dist/Suziee.apk"
+          fi
           exit $STATUS
 
       # GitHub does not expose Actions step logs to unauthenticated API clients, but it
@@ -88,11 +123,11 @@ jobs:
                 done
           fi
 
-      - name: Upload debug APK
+      - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: Suziee-debug-APK
-          path: app/build/outputs/apk/debug/*.apk
+          name: Suziee-APK
+          path: dist/Suziee.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -126,12 +161,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK="dist/Suziee.apk"
           if [ ! -f "$APK" ]; then
             echo "::error::No APK was produced, nothing to publish."
             exit 1
           fi
-          cp "$APK" Suziee.apk
+
+          if [ "${{ steps.signing.outputs.mode }}" = "release" ]; then
+            SIGN_NOTE="Signed with the private Suziee release key."
+          else
+            SIGN_NOTE="**Warning:** this build is debug-signed, because the private signing key is not configured yet."
+          fi
 
           TAG="v1.2-build-${GITHUB_RUN_NUMBER}"
           BODY="**Suziee v1.2** - anime music player for Android.
@@ -144,9 +184,11 @@ jobs:
           2. If Android asks, allow *Install unknown apps* for your browser or file manager.
           3. Only if a previous Suziee build was signed with an older key: uninstall it first, then install this one.
 
+          ${SIGN_NOTE}
+
           Built automatically from commit \`${GITHUB_SHA:0:7}\` (workflow run #${GITHUB_RUN_NUMBER})."
 
-          gh release create "$TAG" Suziee.apk \
+          gh release create "$TAG" "$APK" \
             --title "Suziee v1.2 (build ${GITHUB_RUN_NUMBER})" \
             --notes "$BODY" \
             --latest
@@ -160,7 +202,7 @@ jobs:
       - name: Write job summary
         if: always()
         run: |
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK="dist/Suziee.apk"
           {
             echo "## Suziee Android APK build :robot:"
             echo ""
@@ -169,7 +211,8 @@ jobs:
             echo "| Status | \`${{ job.status }}\` |"
             echo "| Branch | \`${{ github.ref_name }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
-            echo "| APK artifact | \`Suziee-debug-APK\` |"
+            echo "| Signing | \`${{ steps.signing.outputs.mode }}\` |"
+            echo "| APK artifact | \`Suziee-APK\` |"
             echo "| APK path | \`$APK\` |"
             echo "| Public release | https://github.com/${{ github.repository }}/releases/latest |"
             echo ""

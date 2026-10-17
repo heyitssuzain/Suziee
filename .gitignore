@@ -16,3 +16,9 @@
 local.properties
 .env
 debug.keystore
+# Private signing material must never be committed. debug.keystore above is the
+# intentionally-public debug key; everything below must stay local / in GitHub Secrets.
+release.keystore
+*.jks
+*.keystore
+*.b64
