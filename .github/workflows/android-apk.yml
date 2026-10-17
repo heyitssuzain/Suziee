@@ -15,6 +15,10 @@ jobs:
     name: Assemble debug APK
     # Pinned to a specific image so the runner does not shift underneath us.
     runs-on: ubuntu-24.04
+    # Write access is required to persist the signing keystore and to publish the
+    # public GitHub Release. Pull requests from forks still get a read-only token.
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout source
@@ -37,16 +41,23 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      # app/build.gradle.kts signs the debug build with ${rootDir}/debug.keystore,
-      # which is git-ignored. Generate one fresh on the runner.
-      - name: Generate debug signing keystore
+      # app/build.gradle.kts signs the debug build with ${rootDir}/debug.keystore.
+      # The very first run generated a key and committed it back to the repo (see the
+      # "Persist signing keystore" step below), so every later build re-uses the SAME
+      # key. That is what allows installed copies of Suziee to be updated in place.
+      - name: Ensure debug signing keystore
         run: |
-          keytool -genkeypair -v \
-            -keystore "$GITHUB_WORKSPACE/debug.keystore" \
-            -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ -f "$GITHUB_WORKSPACE/debug.keystore" ]; then
+            echo "Re-using the keystore committed to the repository."
+          else
+            echo "No keystore in the repository yet - generating one."
+            keytool -genkeypair -v \
+              -keystore "$GITHUB_WORKSPACE/debug.keystore" \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
@@ -85,6 +96,63 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # The workspace keystore is git-ignored, so on the very first run it only exists on
+      # the runner. Commit it back once so that every future build is signed with an
+      # identical key - otherwise Android rejects in-place updates with
+      # "App not installed / signatures do not match". "[skip ci]" stops this commit from
+      # triggering another build, and the step is non-fatal either way.
+      - name: Persist signing keystore
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        continue-on-error: true
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/debug.keystore" ] \
+             && ! git ls-files --error-unmatch debug.keystore >/dev/null 2>&1; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -f debug.keystore
+            git commit -m "chore: persist debug signing keystore [skip ci]"
+            git push
+            echo "Keystore committed for future builds."
+          else
+            echo "Keystore already tracked (or missing) - nothing to persist."
+          fi
+
+      # Publish a public, no-login-needed download. The asset is renamed to Suziee.apk so
+      # the "latest release" URL stays stable:
+      #   https://github.com/heyitssuzain/Suziee/releases/latest/download/Suziee.apk
+      - name: Publish APK to GitHub Releases
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK" ]; then
+            echo "::error::No APK was produced, nothing to publish."
+            exit 1
+          fi
+          cp "$APK" Suziee.apk
+
+          TAG="v1.2-build-${GITHUB_RUN_NUMBER}"
+          BODY="**Suziee v1.2** - anime music player for Android.
+
+          ### Download
+          Tap **Suziee.apk** under *Assets* below.
+
+          ### Install
+          1. Open the downloaded \`Suziee.apk\` on your Android phone.
+          2. If Android asks, allow *Install unknown apps* for your browser or file manager.
+          3. Only if a previous Suziee build was signed with an older key: uninstall it first, then install this one.
+
+          Built automatically from commit \`${GITHUB_SHA:0:7}\` (workflow run #${GITHUB_RUN_NUMBER})."
+
+          gh release create "$TAG" Suziee.apk \
+            --title "Suziee v1.2 (build ${GITHUB_RUN_NUMBER})" \
+            --notes "$BODY" \
+            --latest
+
+          echo "Release published: https://github.com/${GITHUB_REPOSITORY}/releases/latest"
+
       - name: Run unit tests
         continue-on-error: true
         run: gradle testDebugUnitTest --stacktrace
@@ -103,10 +171,15 @@ jobs:
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| APK artifact | \`Suziee-debug-APK\` |"
             echo "| APK path | \`$APK\` |"
+            echo "| Public release | https://github.com/${{ github.repository }}/releases/latest |"
             echo ""
             if [ -f "$APK" ]; then
               SIZE=$(du -h "$APK" | cut -f1)
-              echo "APK built successfully (size: **$SIZE**). Download it from the **Artifacts** section of this run."
+              echo "APK built successfully (size: **$SIZE**)."
+              echo ""
+              echo "- Anyone can download it from **Releases**:"
+              echo "  https://github.com/${{ github.repository }}/releases/latest/download/Suziee.apk"
+              echo "- It is also attached to this run under **Artifacts** (login required)."
             else
               echo "> :warning: APK was not produced. Check the build logs above."
             fi
