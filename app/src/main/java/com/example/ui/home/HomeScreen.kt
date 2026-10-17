@@ -48,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
@@ -210,7 +211,7 @@ fun HomeScreen(
                         contentDescription = "Hero Artwork",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
-                        alignment = Alignment(0.5f, 0.24f)
+                        alignment = BiasAlignment(0.5f, 0.24f)
                     )
 
                     // Cinematic colour grade: cool wash from the top, deep fade to the base.

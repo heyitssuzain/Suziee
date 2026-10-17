@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -128,7 +129,7 @@ fun LandingScreen(
                 contentScale = ContentScale.Crop,
                 // Bias the crop slightly above centre so the character's face stays framed
                 // on tall and wide screens alike.
-                alignment = Alignment(0.5f, 0.4f)
+                alignment = BiasAlignment(0.5f, 0.4f)
             )
 
             // Deep gradient overlay ensuring text readability and cyberpunk atmosphere
