@@ -97,6 +97,7 @@ import com.example.domain.model.Track
 import com.example.playback.MusicPlayerManager
 import com.example.playback.RepeatMode as PlaybackRepeatMode
 import com.example.ui.components.WaveformVisualizer
+import com.example.ui.components.rememberDownloadUiStatus
 import com.example.ui.theme.SuzieeAccentPrimary
 import com.example.ui.theme.SuzieeAccentSecondary
 import com.example.ui.theme.SuzieeBgPrimary
@@ -128,6 +129,7 @@ fun PlayerScreen(
     }
 
     val isFavorite by playerManager.repository.isFavorite(track.id).collectAsState(initial = false)
+    val downloadStatus = rememberDownloadUiStatus(track.id)
     val scope = rememberCoroutineScope()
 
     var showLyrics by remember { mutableStateOf(false) }
@@ -378,15 +380,30 @@ fun PlayerScreen(
                     }
 
                     IconButton(
-                        onClick = { onDownloadTrack(track) },
+                        onClick = { if (!downloadStatus.active) onDownloadTrack(track) },
                         modifier = Modifier.testTag("player_download_button")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Download,
-                            contentDescription = "Download",
-                            tint = if (track.isDownloaded) SuzieeAccentSecondary else SuzieeTextMuted,
-                            modifier = Modifier.size(24.dp)
-                        )
+                        if (downloadStatus.active) {
+                            if (downloadStatus.percent < 0) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                CircularProgressIndicator(
+                                    progress = { downloadStatus.percent / 100f },
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = "Download",
+                                tint = if (track.isDownloaded) SuzieeAccentSecondary else SuzieeTextMuted,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                 }
             }

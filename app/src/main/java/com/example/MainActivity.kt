@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
 
         val app = application as SuzieeApplication
         playerManager = app.playerManager
-        downloadManager = DownloadManager(this, app.database, playerManager.repository)
+        downloadManager = app.downloadManager
         voiceRecognizer = VoiceRecognizer(this)
 
         setContent {

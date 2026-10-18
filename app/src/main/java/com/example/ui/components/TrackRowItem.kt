@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -27,6 +28,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.SuzieeApplication
 import com.example.domain.model.Track
 import com.example.ui.theme.SuzieeAccentPrimary
 import com.example.ui.theme.SuzieeAccentSecondary
@@ -68,6 +71,7 @@ fun TrackRowItem(
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val downloadStatus = rememberDownloadUiStatus(track.id)
 
     Row(
         modifier = modifier
@@ -171,6 +175,29 @@ fun TrackRowItem(
             }
         }
 
+        // Live download feedback - appears the instant a download starts, wherever this
+        // track is listed (Home, Library, Search), not only on the Downloads screen.
+        if (downloadStatus.active) {
+            if (downloadStatus.percent < 0) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+            } else {
+                CircularProgressIndicator(
+                    progress = { downloadStatus.percent / 100f },
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+                Text(
+                    text = "${downloadStatus.percent}%",
+                    color = SuzieeAccentSecondary,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(start = 2.dp)
+                )
+            }
+        }
+
         // More Menu
         Box {
             IconButton(
@@ -209,9 +236,18 @@ fun TrackRowItem(
                         }
                     )
                 }
-                if (onDownload != null) {
+                if (onDownload != null && !downloadStatus.active) {
                     DropdownMenuItem(
-                        text = { Text(if (track.isDownloaded) "Downloaded" else "Download Offline") },
+                        text = {
+                            Text(
+                                when {
+                                    downloadStatus.active && downloadStatus.percent < 0 -> "Starting download…"
+                                    downloadStatus.active -> "Downloading… ${downloadStatus.percent}%"
+                                    track.isDownloaded -> "Downloaded"
+                                    else -> "Download Offline"
+                                }
+                            )
+                        },
                         leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
                         onClick = {
                             showMenu = false
@@ -232,5 +268,33 @@ fun TrackRowItem(
                 }
             }
         }
+    }
+}
+
+/** Where a track's download stands right now, for inline UI feedback. */
+data class DownloadUiStatus(
+    val active: Boolean = false,
+
+    /** -1 means "started, size unknown" (indeterminate); 0..99 is a real percentage. */
+    val percent: Int = -1
+)
+
+/**
+ * Observes the shared downloads table for one track id so any row or button showing a
+ * download action can reflect live progress immediately - not just the Downloads screen.
+ */
+@Composable
+fun rememberDownloadUiStatus(trackId: String): DownloadUiStatus {
+    val downloads by remember {
+        SuzieeApplication.instance.downloadManager.downloadsFlow
+    }.collectAsState(initial = emptyList())
+
+    val entity = downloads.firstOrNull { it.trackId == trackId }
+        ?: return DownloadUiStatus()
+
+    return when (entity.status) {
+        "RESOLVING" -> DownloadUiStatus(active = true, percent = -1)
+        "DOWNLOADING" -> DownloadUiStatus(active = true, percent = entity.progressPercent)
+        else -> DownloadUiStatus()
     }
 }

@@ -390,6 +390,27 @@ fun HomeScreen(
             )
         }
 
+        // 3d. Mainstream Trending - for general listeners, kept fully separate from the
+        // anime rails above (which stay exactly as they were).
+        item {
+            DiscoveryRail(
+                title = "Bollywood & Hindi Hits",
+                subtitle = "Mainstream trending in India",
+                query = "Bollywood Top Songs",
+                playerManager = playerManager,
+                onOpenFullSearch = onNavigateToSearch
+            )
+        }
+        item {
+            DiscoveryRail(
+                title = "Global Top Hits",
+                subtitle = "English & international chart-toppers",
+                query = "Top English Hits This Week",
+                playerManager = playerManager,
+                onOpenFullSearch = onNavigateToSearch
+            )
+        }
+
         // 4. Recently Played / Continue Listening
         if (recentlyPlayed.isNotEmpty()) {
             item {
