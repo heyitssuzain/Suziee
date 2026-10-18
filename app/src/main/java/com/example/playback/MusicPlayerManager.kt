@@ -148,6 +148,11 @@ class MusicPlayerManager(
                 )
                 .build()
         )
+        // Step used by the notification's / lock screen's seek-back and seek-forward
+        // buttons (these setters live on the builder in Media3 1.5.x). The next/previous
+        // *track* buttons are advertised by the MediaSession in MediaPlaybackService.
+        .setSeekBackIncrementMs(SEEK_INCREMENT_MS)
+        .setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
         .build()
         .apply {
             val audioAttributes = AudioAttributes.Builder()
@@ -156,12 +161,6 @@ class MusicPlayerManager(
                 .build()
             setAudioAttributes(audioAttributes, true)
             setHandleAudioBecomingNoisy(true)
-            // The system media notification shows seek-back/forward buttons when the
-            // player advertises them; these make those buttons work at all times (the
-            // next/previous track buttons are advertised by the MediaSession callback in
-            // MediaPlaybackService).
-            setSeekBackIncrementMs(SEEK_INCREMENT_MS)
-            setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
         }
 
     private val _playbackState = MutableStateFlow(PlaybackState())
