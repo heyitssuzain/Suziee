@@ -3,6 +3,7 @@ package com.example.playback
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -155,6 +156,12 @@ class MusicPlayerManager(
                 .build()
             setAudioAttributes(audioAttributes, true)
             setHandleAudioBecomingNoisy(true)
+            // The system media notification shows seek-back/forward buttons when the
+            // player advertises them; these make those buttons work at all times (the
+            // next/previous track buttons are advertised by the MediaSession callback in
+            // MediaPlaybackService).
+            setSeekBackIncrementMs(SEEK_INCREMENT_MS)
+            setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
         }
 
     private val _playbackState = MutableStateFlow(PlaybackState())
@@ -258,7 +265,7 @@ class MusicPlayerManager(
         })
     }
 
-    /** Surfaces a genuine, user-facing playback failure (after every retry was spent). */
+    /** Surface an honest, user-facing failure (after every retry was spent). */
     private fun failPlayback(error: PlaybackException?) {
         _playbackState.update {
             it.copy(
@@ -269,6 +276,22 @@ class MusicPlayerManager(
         }
         Log.e(TAG, "Playback failed: ${error?.localizedMessage}")
     }
+
+    /**
+     * Honest "nothing playable" text for a track that could not be resolved at all.
+     *
+     * For a YouTube catalogue request we deliberately refuse to substitute a different
+     * recording, so the message states that instead of blaming the network (which is what
+     * made the old behaviour look like a connection problem when the app had actually
+     * found only a wrong/fan-made version).
+     */
+    private fun unplayableMessage(track: Track): String =
+        if (looksLikeYouTubeVideoId(track.id)) {
+            "Couldn't play the official recording of this song. " +
+                "No verified matching source was found - tap retry."
+        } else {
+            "Couldn't play this track. Check your connection and tap retry."
+        }
 
     /**
      * Makes sure the media session service is running so the notification and lock
@@ -366,7 +389,7 @@ class MusicPlayerManager(
                         it.copy(
                             isLoading = false,
                             isPlaying = false,
-                            errorMessage = "Couldn't play this track. Check your connection and tap retry."
+                            errorMessage = unplayableMessage(track)
                         )
                     }
                     return@launch
@@ -394,8 +417,14 @@ class MusicPlayerManager(
      * @param useSniffer false to skip straight to SoundCloud (used by the failover).
      */
     private suspend fun resolveRemoteStream(track: Track, useSniffer: Boolean): StreamInfo? {
-        if (useSniffer && looksLikeYouTubeVideoId(track.id)) {
+        // A YouTube id means the user asked for a specific catalogue recording. If the
+        // sniffer cannot produce it, SoundCloud may only be used as a *verified* match -
+        // never as an unchecked substitute (that is how wrong/duplicate audio appeared).
+        val officialRequest = looksLikeYouTubeVideoId(track.id)
+
+        if (useSniffer && officialRequest) {
             Log.i(TAG, "PRIMARY: sniffing YouTube via headless WebView (${track.id})")
+            val startedAt = SystemClock.elapsedRealtime()
             // CRITICAL for cross-device reliability: a WebView that is missing, disabled or
             // outdated (very common on a friend's phone) throws while being constructed. If
             // that exception escaped, the SoundCloud fallback below would never run and the
@@ -408,19 +437,24 @@ class MusicPlayerManager(
                 Log.w(TAG, "Sniffer unavailable on this device (${e.message}) - using fallback")
                 null
             }
+            val elapsed = SystemClock.elapsedRealtime() - startedAt
             if (sniffed != null) {
                 currentSource = StreamSource.YOUTUBE_SNIFFER
-                Log.i(TAG, "Sniffer captured a ${sniffed.mimeType ?: "media"} stream")
+                Log.i(
+                    TAG,
+                    "PRIMARY OK: verified ${sniffed.mimeType ?: "media"} stream in ${elapsed}ms"
+                )
                 return sniffed
             }
             Log.w(
                 TAG,
-                "Sniffer timed out after ${YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS}ms - " +
-                    "FALLBACK: SoundCloud"
+                "PRIMARY FAILED: sniffer gave no verified stream after ${elapsed}ms " +
+                    "(window ${YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS}ms) - " +
+                    "falling back to SoundCloud (strict=$officialRequest)"
             )
         }
 
-        return resolveSoundCloudWithRetry(track)
+        return resolveSoundCloudWithRetry(track, strict = officialRequest)
     }
 
     /**
@@ -429,11 +463,16 @@ class MusicPlayerManager(
      * Resolving is a handful of small HTTP calls, so retrying is cheap and it means a slow
      * or briefly flaky connection produces a slightly longer "buffering" state instead of
      * an immediate failure.
+     *
+     * @param strict requires a verified same-recording match (see
+     * [com.example.data.repository.MusicRepository.resolveStreamUrl]). When strict is on
+     * and nothing verifies, this returns null on purpose: the caller shows an honest
+     * error instead of playing a different recording.
      */
-    private suspend fun resolveSoundCloudWithRetry(track: Track): StreamInfo? {
+    private suspend fun resolveSoundCloudWithRetry(track: Track, strict: Boolean): StreamInfo? {
         for (attempt in 0 until SOUNDCLOUD_ATTEMPTS) {
             val stream = try {
-                repository.resolveStreamUrl(track).getOrNull()
+                repository.resolveStreamUrl(track, strict = strict).getOrNull()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -443,7 +482,7 @@ class MusicPlayerManager(
 
             if (stream != null && stream.url.isNotBlank()) {
                 currentSource = StreamSource.SOUNDCLOUD
-                Log.i(TAG, "FALLBACK: playing SoundCloud stream")
+                Log.i(TAG, "FALLBACK OK: SoundCloud stream (strict=$strict, attempt ${attempt + 1})")
                 return stream
             }
 
@@ -473,7 +512,7 @@ class MusicPlayerManager(
                         it.copy(
                             isLoading = false,
                             isPlaying = false,
-                            errorMessage = "Couldn't play this track. Check your connection and tap retry."
+                            errorMessage = unplayableMessage(track)
                         )
                     }
                     return@launch
@@ -488,7 +527,7 @@ class MusicPlayerManager(
                     it.copy(
                         isLoading = false,
                         isPlaying = false,
-                        errorMessage = "Couldn't play this track. Check your connection and tap retry."
+                        errorMessage = unplayableMessage(track)
                     )
                 }
             }
@@ -791,5 +830,8 @@ class MusicPlayerManager(
 
         /** Linear backoff between SoundCloud attempts (attempt 1 waits 900ms, etc.). */
         private const val SOUNDCLOUD_RETRY_BACKOFF_MS = 900L
+
+        /** Step used by the notification's seek-back / seek-forward buttons. */
+        private const val SEEK_INCREMENT_MS = 10_000L
     }
 }

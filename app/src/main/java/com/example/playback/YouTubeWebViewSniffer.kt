@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -47,16 +48,20 @@ import java.util.concurrent.atomic.AtomicBoolean
  *         `WebResourceResponse`, so the request never reaches the network.
  *       - **AUDIO SNIFFER**: any `googlevideo.com/.../videoplayback?...mime=audio`
  *         request is the real audio stream. That URL is captured.
- *  3. As soon as a URL is captured we `stopLoading()` the WebView, tear it down, and
- *     return the URL so ExoPlayer can take over natively (background playback,
- *     notification controls, the whole MediaSession stack).
+ *  3. The captured URL is **verified** against the requested video id (the page reports
+ *     the id it is actually playing). A capture belonging to a different video - which
+ *     is what YouTube's autoplay/redirect does when the requested video is unavailable -
+ *     is discarded instead of played. The media request that produced it is answered
+ *     with an empty body, so the WebView itself never plays or downloads audio (no
+ *     second, overlapping sound source). The WebView is then torn down and ExoPlayer
+ *     takes over natively (background playback, notification controls, MediaSession).
  *
  * Every method that touches the WebView runs on the main thread; the interceptor
  * callback itself fires on a WebView worker thread, so it only touches thread-safe
  * primitives and never the WebView directly.
  *
- * Any failure (no WebView available, timeout, no audio request seen) returns `null`
- * and the caller falls through to the SoundCloud fallback.
+ * Any failure (no WebView available, 8s window elapsed, no matching audio request seen)
+ * returns `null` and the caller falls through to the SoundCloud fallback.
  */
 @SuppressLint("SetJavaScriptEnabled")
 class YouTubeWebViewSniffer(private val context: Context) {
@@ -72,12 +77,20 @@ class YouTubeWebViewSniffer(private val context: Context) {
         withContext(Dispatchers.Main) {
             if (videoId.isBlank()) return@withContext null
 
-            val session = SniffSession(context)
+            val startedAt = SystemClock.elapsedRealtime()
+            val session = SniffSession(context, videoId)
             try {
                 session.start("$WATCH_URL$videoId")
                 val captured = withTimeoutOrNull(timeoutMs) { session.awaitStream() }
+                val elapsed = SystemClock.elapsedRealtime() - startedAt
                 if (captured == null) {
-                    Log.w(TAG, "Sniffer found no audio stream within ${timeoutMs}ms for $videoId")
+                    Log.w(
+                        TAG,
+                        "Primary sniffer produced no stream for $videoId after ${elapsed}ms " +
+                            "(window ${timeoutMs}ms) - SoundCloud fallback allowed"
+                    )
+                } else {
+                    Log.i(TAG, "Primary sniffer resolved $videoId in ${elapsed}ms")
                 }
                 captured
             } catch (e: Exception) {
@@ -92,12 +105,15 @@ class YouTubeWebViewSniffer(private val context: Context) {
      * One sniffing attempt: owns the WebView, the interceptor and the result future.
      * Created and destroyed per resolve so no YouTube page state leaks between tracks.
      */
-    private class SniffSession(private val context: Context) {
+    private class SniffSession(private val context: Context, private val requestedVideoId: String) {
 
         /** Completed with the captured stream, or never completed on timeout. */
         private val result = CompletableDeferred<StreamInfo?>()
         private val mainHandler = Handler(Looper.getMainLooper())
         private val disposed = AtomicBoolean(false)
+
+        /** Only one capture may be under verification at a time. */
+        private val verificationScheduled = AtomicBoolean(false)
 
         private var webView: WebView? = null
 
@@ -188,13 +204,20 @@ class YouTubeWebViewSniffer(private val context: Context) {
                     // genuine, fully-signed audio stream the YouTube player just built.
                     // This is the moment we were waiting for: capture it and stop.
                     if (isAudioStreamRequest(host, url)) {
-                        val stream = buildStreamInfo(url)
-                        if (stream != null && result.complete(stream)) {
-                            Log.i(TAG, "Captured audio stream: ${stream.mimeType ?: "unknown"}")
-                            // Stop the WebView loading ASAP (main thread). We stop this
-                            // session's own WebView, never the intercepted one.
-                            mainHandler.post { runCatching { this@SniffSession.webView?.stopLoading() } }
+                        // Two things must happen before this URL is used:
+                        //  1. It must belong to the video the user actually asked for.
+                        //     YouTube auto-advances to a *different* video when the
+                        //     requested one is unavailable/blocked; accepting that capture
+                        //     is exactly how wrong audio used to reach the player.
+                        //  2. The WebView must stop playing audio itself. ExoPlayer owns
+                        //     playback; if the browser keeps playing we hear two sources at
+                        //     once ("duplicate audio"). We already hold the signed URL, so
+                        //     the media request is answered with an empty body: the page
+                        //     plays nothing and downloads nothing we are not going to use.
+                        if (verificationScheduled.compareAndSet(false, true)) {
+                            verifyAndComplete(url)
                         }
+                        return emptyResponse()
                     }
 
                     // Everything else loads normally.
@@ -216,6 +239,62 @@ class YouTubeWebViewSniffer(private val context: Context) {
         private fun nudgePlayer(view: WebView?) {
             if (view == null || disposed.get()) return
             runCatching { view.evaluateJavascript(NUDGE_JS, null) }
+        }
+
+        /**
+         * Confirms that the page is really playing [requestedVideoId] before handing the
+         * captured URL to ExoPlayer, then completes the result.
+         *
+         * The check is deliberately permissive: if the page cannot report its video id
+         * (older player markup), the capture is accepted - exactly the previous
+         * behaviour - so this can only ever *remove* wrong audio, never break a working
+         * capture.
+         */
+        private fun verifyAndComplete(rawUrl: String) {
+            mainHandler.post {
+                val view = webView
+                if (view == null || disposed.get()) {
+                    verificationScheduled.set(false)
+                    return@post
+                }
+
+                runCatching {
+                    view.evaluateJavascript(CURRENT_VIDEO_ID_JS) { value ->
+                        val reported = value
+                            ?.trim()
+                            ?.trim('"')
+                            ?.takeIf { it.isNotEmpty() && it != "null" }
+
+                        if (reported != null && reported != requestedVideoId) {
+                            // The page drifted to another video (autoplay/redirect). Keep
+                            // sniffing within the window instead of playing the wrong song.
+                            Log.w(
+                                TAG,
+                                "Ignored audio for '$reported' - requested '$requestedVideoId'"
+                            )
+                            verificationScheduled.set(false)
+                            return@evaluateJavascript
+                        }
+
+                        val stream = buildStreamInfo(rawUrl)
+                        if (stream == null) {
+                            verificationScheduled.set(false)
+                            return@evaluateJavascript
+                        }
+
+                        if (result.complete(stream)) {
+                            Log.i(
+                                TAG,
+                                "Captured verified audio stream " +
+                                    "(${stream.mimeType ?: "unknown"}) for $requestedVideoId"
+                            )
+                            mainHandler.post {
+                                runCatching { this@SniffSession.webView?.stopLoading() }
+                            }
+                        }
+                    }
+                }.onFailure { verificationScheduled.set(false) }
+            }
         }
 
         // ---------------------------------------------------------------------------------
@@ -307,14 +386,35 @@ class YouTubeWebViewSniffer(private val context: Context) {
         private const val TAG = "YouTubeSniffer"
 
         /**
-         * How long we give the headless WebView to reach the first audio request.
-         * The product spec asks for a 5s timeout; a cold WebView on a slow network often
-         * needs that long just to bootstrap the player, and anything past this point
-         * falls through to the SoundCloud fallback (which is fast and reliable).
+         * How long the headless WebView gets to reach the first *verified* audio request
+         * before the SoundCloud fallback is allowed to proceed.
+         *
+         * This is a ceiling, not a wait: `awaitStream()` completes the moment a verified
+         * audio request is captured, so a healthy sniff returns in a few hundred ms.
+         * The window was widened from 5s to 8s on request so slow cold-start WebViews on
+         * mobile networks are not cut off prematurely.
          */
-        const val SNIFF_TIMEOUT_MS = 5_000L
+        const val SNIFF_TIMEOUT_MS = 8_000L
 
         private const val NUDGE_RETRY_MS = 1_500L
+
+        /**
+         * Reads the id of the video the page's own player is currently on. Returns an
+         * empty string when the player API is unavailable, which the caller treats as
+         * "cannot verify - accept the capture" (never as a mismatch).
+         */
+        private const val CURRENT_VIDEO_ID_JS = """
+            (function() {
+              try {
+                var p = document.getElementById('movie_player');
+                if (p && p.getVideoData) {
+                  var d = p.getVideoData() || {};
+                  return d.video_id || '';
+                }
+                return '';
+              } catch (e) { return ''; }
+            })();
+        """
 
         private const val WATCH_URL = "https://m.youtube.com/watch?v="
         private const val YOUTUBE_ORIGIN = "https://www.youtube.com"
@@ -359,8 +459,7 @@ class YouTubeWebViewSniffer(private val context: Context) {
         )
 
         /** Forces the page's player to start without a user gesture. */
-        private const val NUDGE_JS = """
-            (function() {
+        private const val NUDGE_JS = """            (function() {
               try {
                 var p = document.getElementById('movie_player');
                 if (p) {

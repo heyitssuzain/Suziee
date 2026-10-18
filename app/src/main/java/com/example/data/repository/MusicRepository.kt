@@ -60,8 +60,15 @@ class MusicRepository(
      *
      * @param allowHls when false only a single progressive file is accepted. The
      * downloader sets this because an HLS playlist cannot be saved as one audio file.
+     * @param strict when true the SoundCloud substitute must be *verified* as the same
+     * recording (title + artist + duration) - used for playback of a requested official
+     * recording so a fan-made/slowed/cover version is never played instead.
      */
-    suspend fun resolveStreamUrl(track: Track, allowHls: Boolean = true): Result<StreamInfo> {
+    suspend fun resolveStreamUrl(
+        track: Track,
+        allowHls: Boolean = true,
+        strict: Boolean = false
+    ): Result<StreamInfo> {
         // If downloaded locally, use the local file path!
         val localPath = track.localFilePath
         if (track.isDownloaded && !localPath.isNullOrBlank()) {
@@ -69,7 +76,7 @@ class MusicRepository(
         }
 
         return withTimeoutOrNull(RESOLVE_TIMEOUT_MS) {
-            val soundCloud = soundCloudApi.resolve(track, allowHls = allowHls)
+            val soundCloud = soundCloudApi.resolve(track, allowHls = allowHls, strict = strict)
             if (soundCloud != null && soundCloud.url.isNotBlank()) {
                 runCatching {
                     trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = soundCloud.url)))

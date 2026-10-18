@@ -61,9 +61,14 @@ class SoundCloudApiClient {
      * @param allowHls when false only a single progressive file is accepted. Used by the
      * simple downloader fast-path (an HLS playlist is not a file; when we must have one
      * file the HLS route is stitched together by `HlsDownloader` instead).
+     * @param strict when true the candidate must be *verified* as the same recording of
+     * the same song (title + artist identity + close duration, no alternate-version
+     * uploads). Used when SoundCloud stands in for a requested official YouTube
+     * recording: it is better to return null and let the UI show an honest error than to
+     * silently play a fan-made/slowed/cover version of the requested song.
      * @return a verified, playable [StreamInfo], or null when nothing suitable was found.
      */
-    suspend fun resolve(track: Track, allowHls: Boolean = true): StreamInfo? =
+    suspend fun resolve(track: Track, allowHls: Boolean = true, strict: Boolean = false): StreamInfo? =
         withContext(Dispatchers.IO) {
             try {
                 // Two attempts, but the second one only happens when the search itself came
@@ -73,7 +78,7 @@ class SoundCloudApiClient {
                 repeat(2) { attempt ->
                     val key = clientId() ?: return@withContext null
 
-                    val candidates = searchTracks(track, key)
+                    val candidates = searchTracks(track, key, strict)
                     if (candidates.isEmpty() && attempt == 0) {
                         // httpGet already dropped a 401/403 key, so this re-scrapes it.
                         cachedClientId = null
@@ -86,13 +91,21 @@ class SoundCloudApiClient {
                             Log.i(
                                 TAG,
                                 "Selected '${candidate.optString("title")}' " +
-                                    "(${candidate.optLong("duration") / 1000}s, ${stream.mimeType})"
+                                    "(${candidate.optLong("duration") / 1000}s, " +
+                                    "${stream.mimeType}, strict=$strict)"
                             )
                             return@withContext stream
                         }
                         Log.w(TAG, "Rejected after verification: '${candidate.optString("title")}'")
                     }
 
+                    if (strict) {
+                        Log.w(
+                            TAG,
+                            "No candidate passed strict verification for '${track.title}' " +
+                                "by '${track.artist}' - refusing to substitute a different recording"
+                        )
+                    }
                     return@withContext null
                 }
                 null
@@ -142,8 +155,12 @@ class SoundCloudApiClient {
     /**
      * Searches SoundCloud (artist+title, then title alone) and returns acceptable
      * candidates, best match first.
+     *
+     * @param strict additionally requires [SoundCloudMatch.isStrictVerifiedMatch] for
+     * every candidate, so a request for an official recording can never fall through to
+     * a different recording of the same song.
      */
-    private fun searchTracks(track: Track, clientId: String): List<JSONObject> {
+    private fun searchTracks(track: Track, clientId: String, strict: Boolean = false): List<JSONObject> {
         val queries = listOf(
             listOf(track.artist, track.title),
             listOf(track.title)
@@ -166,6 +183,14 @@ class SoundCloudApiClient {
 
                 val score = matchScore(track, candidate)
                 if (score < MIN_MATCH_SCORE) continue
+                if (strict && !isStrictVerifiedMatch(track, candidate, score)) {
+                    Log.i(
+                        TAG,
+                        "Strict match rejected '${candidate.optString("title")}' " +
+                            "for '${track.title}'"
+                    )
+                    continue
+                }
                 scored += Scored(candidate, score)
             }
 
@@ -175,6 +200,18 @@ class SoundCloudApiClient {
 
         return scored.sortedByDescending { it.score }.map { it.track }
     }
+
+    /** Bridges a search hit to the pure, unit-tested verification gate. */
+    private fun isStrictVerifiedMatch(wanted: Track, candidate: JSONObject, score: Double): Boolean =
+        SoundCloudMatch.isStrictVerifiedMatch(
+            wantedTitle = wanted.title,
+            wantedArtist = wanted.artist,
+            wantedDurationMs = wanted.durationSeconds * 1000L,
+            candidateTitle = candidate.optString("title"),
+            candidateUploader = candidate.optJSONObject("user")?.optString("username").orEmpty(),
+            candidateDurationMs = candidate.optLong("duration", 0L),
+            overallScore = score
+        )
 
     private fun searchCollection(query: String, clientId: String): JSONArray? {
         val url = "$API_URL/search/tracks?q=${encode(query)}&client_id=$clientId" +
@@ -239,44 +276,28 @@ class SoundCloudApiClient {
             score += 0.15
         }
 
+        // Decorated uploads (remix / slowed / cover ...) are demoted. Detection runs on
+        // the RAW title, because decorations normally live in parentheses - which
+        // `normalize()` strips, so the old normalised check never saw "(Slowed + Reverb)"
+        // at all and those uploads scored as if they were the original. Matching is
+        // word-boundary based so "Deliver"/"Discover" are not read as live/cover.
+        val rawTitle = candidate.optString("title")
+        val rawUploader = candidate.optJSONObject("user")?.optString("username").orEmpty()
         DECORATION_PENALTIES.forEach { (word, penalty) ->
-            if (normalizedTitle.contains(word)) score -= penalty
+            if (SoundCloudMatch.containsMarker(rawTitle, word) ||
+                SoundCloudMatch.containsMarker(rawUploader, word)
+            ) {
+                score -= penalty
+            }
         }
         return score
     }
 
     /** Lowercases and strips decorations like "(Official Video)", "[HD]" and punctuation. */
-    private fun normalize(value: String): String {
-        var text = value.lowercase()
-        text = text.replace(Regex("\\([^)]*\\)"), " ")
-        text = text.replace(Regex("\\[[^]]*]"), " ")
-        text = text
-            .replace("official video", " ")
-            .replace("official audio", " ")
-            .replace("lyric video", " ")
-            .replace("lyrics", " ")
-            .replace("audio", " ")
-            .replace("topic", " ")
-            .replace("remastered", " ")
-            .replace("feat.", " ")
-            .replace("ft.", " ")
-        text = text.replace(Regex("[^a-z0-9 ]"), " ")
-        return text.replace(Regex("\\s+"), " ").trim()
-    }
+    private fun normalize(value: String): String = SoundCloudMatch.normalize(value)
 
     /** Token-overlap (Jaccard) similarity with a containment bonus. 0.0 .. 1.0 */
-    private fun similarity(a: String, b: String): Double {
-        if (a.isBlank() || b.isBlank()) return 0.0
-        if (a == b) return 1.0
-
-        val tokensA = a.split(' ').filter { it.length > 1 }.toSet()
-        val tokensB = b.split(' ').filter { it.length > 1 }.toSet()
-        if (tokensA.isEmpty() || tokensB.isEmpty()) return 0.0
-
-        val common = tokensA.count { tokensB.contains(it) }.toDouble()
-        val jaccard = common / (tokensA.size + tokensB.size - common).toDouble()
-        return if (b.contains(a) || a.contains(b)) maxOf(jaccard, 0.8) else jaccard
-    }
+    private fun similarity(a: String, b: String): Double = SoundCloudMatch.similarity(a, b)
 
     // ---------------------------------------------------------------------------------
     // transcoding -> playable URL
