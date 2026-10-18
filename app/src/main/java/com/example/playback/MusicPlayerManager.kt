@@ -162,7 +162,6 @@ class MusicPlayerManager(
 
     private var progressTrackerJob: Job? = null
     private var originalQueue: List<Track> = emptyList()
-    private var serviceStarted = false
 
     /** The in-flight resolve/sniff job. Cancelled when the user picks another track. */
     private var resolveJob: Job? = null
@@ -229,6 +228,10 @@ class MusicPlayerManager(
                     return
                 }
 
+                // Remember where we were, so a failover resumes mid-song instead of
+                // restarting the recording from the beginning.
+                val resumePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+
                 // Failover trigger #2 from the spec ("persistent playback error"):
                 // a sniffed YouTube URL can go stale - signatures expire and SABR chunks
                 // end mid-stream. Rather than dead-ending on an error, silently re-resolve
@@ -236,7 +239,7 @@ class MusicPlayerManager(
                 if (currentSource == StreamSource.YOUTUBE_SNIFFER && !soundCloudTriedForCurrentTrack) {
                     Log.w(TAG, "YouTube stream failed mid-playback - switching to SoundCloud fallback")
                     soundCloudTriedForCurrentTrack = true
-                    failoverToSoundCloud(track)
+                    failoverToSoundCloud(track, resumePositionMs)
                     return
                 }
 
@@ -246,7 +249,7 @@ class MusicPlayerManager(
                 if (currentSource == StreamSource.SOUNDCLOUD && !transientRetryUsed) {
                     Log.w(TAG, "SoundCloud stream error - one automatic re-resolve")
                     transientRetryUsed = true
-                    failoverToSoundCloud(track)
+                    failoverToSoundCloud(track, resumePositionMs)
                     return
                 }
 
@@ -268,21 +271,19 @@ class MusicPlayerManager(
     }
 
     /**
-     * Starts the playback service lazily, right as playback begins.
+     * Makes sure the media session service is running so the notification and lock
+     * screen reflect playback.
      *
-     * Previously this ran at app launch via startForegroundService(), but nothing was
-     * playing yet, so Android raised a "did not call startForeground" ANR. We now:
-     *   1. Start it only when we actually have media to play, and
-     *   2. Use a plain started service (no 5-second foreground deadline). Media3's
-     *      MediaSessionService promotes itself to foreground as soon as playback is
-     *      ongoing, so background playback still works.
+     * This is deliberately called on **every** playback start and is idempotent:
+     * `startService` on an already-running service merely delivers another
+     * `onStartCommand`. The old one-shot `serviceStarted` flag was a bug - after the
+     * service stopped itself (e.g. `onTaskRemoved` with a paused player) the flag still
+     * said "started", so every later track played with no session and no notification.
      */
     private fun ensurePlaybackServiceStarted() {
-        if (serviceStarted) return
         try {
             val intent = Intent(context, MediaPlaybackService::class.java)
             context.startService(intent)
-            serviceStarted = true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start MediaPlaybackService: ${e.message}", e)
         }
@@ -456,8 +457,11 @@ class MusicPlayerManager(
     /**
      * Re-resolves the current track through SoundCloud only. Called when a sniffed
      * YouTube stream dies mid-playback (expired signature / truncated SABR chunk).
+     *
+     * @param resumePositionMs playback continues from here so the user does not hear
+     * the song restart from the beginning after a mid-track failure.
      */
-    private fun failoverToSoundCloud(track: Track) {
+    private fun failoverToSoundCloud(track: Track, resumePositionMs: Long = 0L) {
         resolveJob?.cancel()
         resolveJob = scope.launch {
             try {
@@ -475,7 +479,7 @@ class MusicPlayerManager(
                     return@launch
                 }
 
-                startPlayback(streamInfo, track)
+                startPlayback(streamInfo, track, resumePositionMs)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -494,8 +498,10 @@ class MusicPlayerManager(
     /**
      * Hands a resolved stream to ExoPlayer natively (background audio, MediaSession
      * notification, Bluetooth controls - the WebView is fully out of the picture here).
+     *
+     * @param startPositionMs optional position to resume from (failover path).
      */
-    private fun startPlayback(streamInfo: StreamInfo, track: Track) {
+    private fun startPlayback(streamInfo: StreamInfo, track: Track, startPositionMs: Long = 0L) {
         val mediaMetadata = MediaMetadata.Builder()
             .setTitle(track.title)
             .setArtist(track.artist)
@@ -517,6 +523,11 @@ class MusicPlayerManager(
         ensurePlaybackServiceStarted()
 
         exoPlayer.setMediaSource(buildMediaSource(mediaItemBuilder.build(), streamInfo.headers))
+        // Resume position must be applied before prepare() so the seek is honoured
+        // during the initial open, not after playback has already started at 0.
+        if (startPositionMs > 0L) {
+            exoPlayer.seekTo(startPositionMs)
+        }
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
     }

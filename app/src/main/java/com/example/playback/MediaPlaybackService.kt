@@ -16,7 +16,22 @@ class MediaPlaybackService : MediaSessionService() {
         super.onCreate()
         try {
             val app = application as SuzieeApplication
-            mediaSession = MediaSession.Builder(this, app.playerManager.exoPlayer).build()
+            // A session activity is what the system's media notification opens when
+            // tapped (and what OEM media controls link to). Without it the notification
+            // is a dead button on many devices; with it, tapping returns to the app.
+            val builder = MediaSession.Builder(this, app.playerManager.exoPlayer)
+            packageManager.getLaunchIntentForPackage(packageName)?.let { launchIntent ->
+                builder.setSessionActivity(
+                    android.app.PendingIntent.getActivity(
+                        this,
+                        0,
+                        launchIntent,
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                            android.app.PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
+            }
+            mediaSession = builder.build()
         } catch (e: Exception) {
             // Never let a session/notification problem take the whole app down.
             Log.e(TAG, "Failed to create MediaSession: ${e.message}", e)

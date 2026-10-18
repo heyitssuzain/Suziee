@@ -67,7 +67,9 @@ class InnerTubeApiClient {
                 }
 
                 val bodyString = response.body?.string() ?: return@withContext Result.success(emptyList())
-                val tracks = parseSearchResponse(bodyString)
+                // Rank so the requested original recording is offered first, not a
+                // remix/slowed+reverb upload that merely scored well in relevance order.
+                val tracks = SearchRanking.rank(query, parseSearchResponse(bodyString))
                 if (tracks.isNotEmpty()) {
                     Result.success(tracks)
                 } else {
@@ -106,7 +108,9 @@ class InnerTubeApiClient {
                     return@withContext Result.failure(Exception("Search failed with HTTP ${response.code}"))
                 }
                 val bodyString = response.body?.string() ?: return@withContext Result.success(emptyList())
-                val tracks = parseGeneralYouTubeSearch(bodyString)
+                // Rank with the user's original query text (this endpoint searched
+                // "$query music audio"), so covers/remixes don't outrank the original.
+                val tracks = SearchRanking.rank(query, parseGeneralYouTubeSearch(bodyString))
                 Result.success(tracks)
             }
         } catch (e: Exception) {
