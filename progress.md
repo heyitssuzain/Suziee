@@ -134,10 +134,21 @@ build/signing workflow are untouched.
 | `progress.md` | this file |
 
 ## Actual test results
-- **Automated (CI, GitHub Actions `android-apk.yml`)**: `testDebugUnitTest` (new
-  `SoundCloudStrictMatchTest` cases + existing tests), `assembleRelease` with the release
-  keystore, `lintRelease`. Result for this pass: see the run linked in the release notes /
-  CI annotations (the previous pass' `v1.2-build-19` run was green).
+- **Automated (CI, GitHub Actions `android-apk.yml`)**:
+  - Run #21 (commit `ef5ba83`) — **all steps green**: `assembleRelease` with the release
+    keystore, **`testDebugUnitTest` succeeded** (the 12 new `SoundCloudStrictMatchTest`
+    cases plus the existing `SearchRankingTest` cases), lint gate, APK upload, and
+    publishing.
+  - Published release: **`v1.2-build-21`**, asset `Suziee.apk`, size 23,834,871 bytes,
+    `sha256:67cc464eac32a0c0bfd2b88db69f63bdf90a2690bed2f14d3c5bf9661502b1db`
+    (differs from build 19's `sha256:49bccd93…`, so these code changes are in the APK).
+  - Run #20 (commit `7a4a53b`) failed on a Kotlin compile error
+    (`Unresolved reference 'setSeekBackIncrementMs'`: in Media3 1.5.1 those setters are on
+    `ExoPlayer.Builder`, not on the player instance). Fixed in `ef5ba83`. Run #20 published
+    nothing.
+  - What this does **not** prove: it compiles, the type/API surface is correct, the strict
+    matching gate behaves as specified (unit-tested), and the APK is signed and packaged.
+    It does **not** exercise a real YouTube response, a WebView, or the system media UI.
 - **NOT verified (no Android device available here)**:
   - that a previously-mismatching song now plays the official recording on a real device
     (the sniffer verification + strict gate are code-verified, and the strict gate is
