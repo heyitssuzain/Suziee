@@ -172,8 +172,24 @@ trending/anime rails, Compose UI/onboarding, theme, app id/version/signing, CI w
     Fix: the sandbox is pinned to SDK 34 (the release build stays on JDK 17), and the results
     step now also publishes per-class test counts (`::notice::TESTRESULT <class> tests=…
     failures=…`) so which tests actually ran is verifiable without authenticated logs.
-  * Latest run for the current commit: see the `v1.2-build-N` release of the newest push —
-    build, lint, tests, packaging and publishing outcomes are recorded there.
+  * **Run #24** (commit `218de28`, current HEAD) — **green, with the test gate enforced**.
+    Every step succeeded *including* `Run unit tests`, and the run's check-run annotations
+    report the per-class results straight from the JUnit XML (readable without GitHub auth):
+
+    | Test class | tests | failures | errors |
+    |---|---|---|---|
+    | `SoundCloudStrictMatchTest` (this pass's gate) | 21 | 0 | 0 |
+    | `SearchRankingTest` | 6 | 0 | 0 |
+    | `VoiceCommandParserTest` | 7 | 0 | 0 |
+    | `ExampleRobolectricTest` | 1 | 0 | 0 |
+    | `ExampleUnitTest` | 1 | 0 | 0 |
+
+    36 tests, 0 failures. Published release: **`v1.2-build-24`**, asset `Suziee.apk`
+    (23,834,871 bytes, `sha256:3879fdf7…`), release notes confirm
+    `Built automatically from commit 218de28` and *"Signed with the private Suziee release
+    key"* — i.e. the APK everyone downloads really is the reviewed commit, release-signed.
+  * Latest run for any newer commit: see the `v1.2-build-N` release notes (`Built
+    automatically from commit …`), plus the `::notice::TESTRESULT …` annotations.
 * **Not verifiable here (no Android device)**: live YouTube sniffing, real SoundCloud
   responses, actual audible output, and the system notification/lock-screen surfaces. Anything
   in the list below is **CODE FIXED BUT DEVICE UNVERIFIED**, never "fixed and verified".
@@ -182,7 +198,7 @@ trending/anime rails, Compose UI/onboarding, theme, app id/version/signing, CI w
 
 | # | Issue | Status |
 |---|-------|--------|
-| 1 | Official songs played duplicate/fan-made audio | **CODE FIXED BUT DEVICE UNVERIFIED** — pass-2 sniffer changes that caused "no acceptable source" for mainstream songs are removed; the substitution gate now rejects only *conflicts* (decorated/different/odd-length) and still refuses to substitute arbitrarily |
+| 1 | Official songs played duplicate/fan-made audio | **CODE FIXED (unit-tested in CI) BUT DEVICE UNVERIFIED** — the pass-2 sniffer changes that made mainstream songs unresolvable are reverted; the substitution gate rejects only *conflicts* and is covered by 21 CI-passing cases, including the exact song from the reported screenshot |
 | 2 | Web-sniffer window must be 8 s | **CODE VERIFIED** — `SNIFF_TIMEOUT_MS = 8_000L`; it is a ceiling (resolves on capture), not a fixed wait; only that constant is 8 s |
 | 3 | Playback startup too slow | **CODE FIXED BUT DEVICE UNVERIFIED** — hedged fallback, off-critical-path DB write, 2×400 ms retries, early service start, timing logs added |
 | 4 | Notification panel | **CODE FIXED BUT DEVICE UNVERIFIED** — permission request moved to a lifecycle-correct point (was silently swallowed); session/controller diagnostics added; Media3 requirements re-checked against the 1.5.1 source |
