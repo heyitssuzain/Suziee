@@ -3,9 +3,110 @@
 Date: 19 Oct 2026 · Base: `v1.2-build-21` · Scope: smallest safe changes, no feature removals,
 no data loss, no identity/signing change.
 
-Three fix passes are recorded here. **Pass 3 (below) is the authoritative one**: pass 2 made
-official songs *stop playing entirely*, so pass 3 re-investigated the pipeline and removed the
-regression instead of adding another layer of tightening.
+Four fix passes are recorded here. **Pass 4 (below) is the current, authoritative one**: it
+replaces the primary extraction source with the pre-warmed headless engine and hardens the
+media surfaces. Pass 3 (also below) is kept for its evidence trail: pass 2 had made official
+songs *stop playing entirely*, and pass 3 removed that regression instead of adding another
+layer of tightening.
+
+---
+
+# PASS 4 — pre-warmed headless extraction engine + strict media session (build 25)
+
+## What was built (requested design, with four deliberate deviations)
+
+| Requested | Shipped | Where |
+|---|---|---|
+| Pre-warmed pool of invisible, never-attached WebViews | up to **2** warm WebViews, reused across resolves, recycled after 120 s idle; warm-up fetches **no page** (zero traffic - the on-disk Chromium HTTP cache already holds the player assets) | `data/remote/extraction/HeadlessExtractorRepository.kt` |
+| `ExtractionService` holding the pool | `ExtractionService` is an **optional, non-foreground, self-stopping** pre-warm host (idles out after 90 s). The pool itself lives in the app-scoped repository, so a killed service can never break extraction | `playback/ExtractionService.kt` |
+| V8 hook on `window.fetch` / `XMLHttpRequest`, parse `streamingData` in the engine | injected hook wraps both APIs **and** polls the player's retained response (the initial response is inlined in the watch page, so this usually hits immediately); parses `adaptiveFormats` inside V8, pushes only `itag\|mime\|bitrate\|length\|url` records over a JS bridge | `HOOK_JS` in the same file |
+| itag 251 (Opus 160k) preferred, then itag 140 (AAC 128k) | `AudioFormatSelector.pickBest` - pure Kotlin, CI-unit-tested | `data/remote/extraction/AudioFormatSelector.kt` |
+| Ad isolation: only the raw media URI reaches the player | true - ExoPlayer only ever receives a `googlevideo` audio URL; YouTube's presentation/player payload is never mounted | `MusicPlayerManager.startPlayback` |
+| Stop the page load the instant the URL is extracted | `stopLoading()` on capture, page muted, WebView released back to the pool | `ExtractionSession.onAudioRequest` |
+| Explicit `startForeground()` + channel + metadata | Media3's `MediaSessionService` performs the promotion itself (doing it by hand fights its notification manager). What *is* controlled: dedicated channel `suziee_playback`, stable notification id 1001, session created inside the service, `isBrowsable=false`/`isPlayable=true` metadata, audio focus + `handleAudioBecomingNoisy` | `playback/MusicPlaybackService.kt`, `MusicPlayerManager.kt` |
+
+**Deviations, and why each one protects playback**
+
+1. **The signed media request stays authoritative; the player-response URL is only the
+   backup** (after a 2.5 s grace). The `adaptiveFormats` URL still carries an *untransformed*
+   `n` parameter (throttled, sometimes 403), whereas the request the page's own player makes
+   has already been transformed by YouTube's JS. Making the JSON URL the first choice is the
+   classic trap that looks faster and plays worse.
+2. **Video segments are not blocked.** Answering a *media* request with an empty body is
+   exactly what made the page's player error out and re-negotiate in pass 2. Blocking a video
+   segment would reintroduce that risk. Ads, artwork, thumbnails, stylesheets and fonts *are*
+   blocked (`AudioTrafficPolicy`), which is where the genuinely wasted traffic was.
+3. **No 200 ms claim.** A cold WebView plus YouTube's player bootstrap cannot be 200 ms. What
+   was actually done for latency: Chromium is instantiated while the user browses (not on the
+   tap), the engine is reused between tracks, and a dead end is cut from 8 s to ~2.5 s.
+4. **The extractor is pooled and session-scoped rather than one long-lived WebView.**
+   Callbacks are bridged through a Flow, so cancelling a resolve (new song, timeout) always
+   tears the page down and releases the WebView - no cross-song leakage.
+
+## Behaviour on failure (unchanged, on purpose)
+Signed capture (immediate) → early player-json candidate (after 2.5 s, only if no signed
+capture) → hedged SoundCloud resolve (3 s) → strict substitution gate → honest error. Only
+*resolution* is parallel; playback stays strictly single-source.
+
+## Automated verification (CI run #25, commit `f0df3fa`) — green, test gate enforced
+| Test class | tests | failures | errors |
+|---|---|---|---|
+| `AudioFormatSelectorTest` (new: format ranking, bridge payload parsing, URL normalisation) | 14 | 0 | 0 |
+| `AudioTrafficPolicyTest` (new: blocks ads/artwork/CSS/fonts, never blocks player/API/CDN/video) | 6 | 0 | 0 |
+| `SoundCloudStrictMatchTest` | 21 | 0 | 0 |
+| `VoiceCommandParserTest` | 7 | 0 | 0 |
+| `SearchRankingTest` | 6 | 0 | 0 |
+| `ExampleRobolectricTest` / `ExampleUnitTest` | 1 / 1 | 0 | 0 |
+
+**56 tests, 0 failures**, published as `::notice::TESTRESULT …` annotations (readable without
+GitHub auth). Release **`v1.2-build-25`**: `Suziee.apk` 23,851,707 bytes,
+`sha256:29bd99f3b6545edc8b4b5f1bfaa64cf15f7837606919a7baaf015787729e8b32`, notes confirm
+`Built automatically from commit f0df3fa (workflow run #25)` and *"Signed with the private
+Suziee release key"*.
+
+**Still device-unverified (no Android device here):** live extraction from YouTube, audible
+output, real startup latency, the notification/lock-screen controls, and whether the early
+candidate path is ever needed on a real phone. All of that is **CODE FIXED BUT DEVICE
+UNVERIFIED**, never "fixed and verified".
+
+## Log tags for the on-device checks
+`adb logcat -s HeadlessExtractor MusicPlayerManager SoundCloudApiClient MainActivity MusicPlaybackService ExtractionService`
+
+Key lines: `Headless extractor navigating to …`, `V8 hook: audio-only itag=… offered`,
+`Captured signed audio stream (…) for …`, `Primary extractor resolved <id> in <ms>
+(confidence=signed-media|early-player-json)`, `PRIMARY OK/FAILED`, `HEDGE`, `FALLBACK OK`,
+`First audio ready in <ms> (source=…)`, `Media controller connected: <pkg>`,
+`Notification surfaces: notificationsEnabled=…`, `Task removed - keeping service alive=…`.
+
+## Status per reported issue (pass 4)
+| # | Issue | Status |
+|---|-------|--------|
+| 1 | Official songs played wrong/duplicate audio | The signed-request capture is preserved and is the authoritative path; the SoundCloud substitute gate still rejects only *conflicts* (21 CI cases incl. the reported screenshot song). **CODE FIXED BUT DEVICE UNVERIFIED** |
+| 2 | Web-extraction window must be 8 s | `HeadlessExtractorRepository.SNIFF_TIMEOUT_MS = 8_000L`, still a ceiling rather than a wait; a dead end is now cut to ~2.5 s by the early-candidate window instead of burning all 8 s. **CODE VERIFIED** |
+| 3 | Playback startup too slow | Warm engine (Chromium off the tap path), pool reuse between songs, shortened failure path, hedged fallback kept, timing logs kept. **CODE FIXED BUT DEVICE UNVERIFIED** |
+| 4 | Notification panel shows the track with working controls | One session in one service, dedicated channel + stable id, full metadata, POST_NOTIFICATIONS requested from `onStart()`, controller diagnostics. **CODE FIXED BUT DEVICE UNVERIFIED** |
+| 5 | Lock-screen controls | Same session published through `onGetSession`; `QueuePlayer` + `onConnect` advertise and implement Next/Previous. **CODE FIXED BUT DEVICE UNVERIFIED** |
+| 6 | Ads / wasted traffic | Ads, artwork, CSS and fonts never reach the network; only the raw audio URL is played. **CODE FIXED BUT DEVICE UNVERIFIED** |
+
+## Changed files (pass 4)
+| File | Change |
+|------|--------|
+| `app/src/main/java/com/example/data/remote/extraction/HeadlessExtractorRepository.kt` | **new** - pre-warmed WebView pool, Flow-based extraction session, V8 `fetch`/XHR hook, signed-request interception, mute/teardown, 8 s window, 2.5 s early-candidate grace |
+| `app/src/main/java/com/example/data/remote/extraction/AudioFormatSelector.kt` | **new** - pure format ranking (251 → 140), bridge-payload parsing, mime detection, chunk-parameter stripping |
+| `app/src/main/java/com/example/data/remote/extraction/AudioTrafficPolicy.kt` | **new** - ad/artwork/CSS/font blocking that never touches the player, the API or the CDN |
+| `app/src/main/java/com/example/playback/ExtractionService.kt` | **new** - optional self-stopping pre-warm service |
+| `app/src/main/java/com/example/playback/MediaPlaybackService.kt` → `MusicPlaybackService.kt` | renamed; dedicated notification channel + stable id; session ownership/`onConnect`/`QueuePlayer` unchanged |
+| `app/src/main/java/com/example/playback/MusicPlayerManager.kt` | extractor wired in (hedge + strict SoundCloud gate untouched); `isBrowsable=false`/`isPlayable=true` metadata; audio-focus comment; `ensureExtractorWarm()`; renamed `YOUTUBE_EXTRACTOR` source |
+| `app/src/main/java/com/example/playback/YouTubeWebViewSniffer.kt` | **removed** (superseded by the engine above; its signed-request capture is preserved inside it) |
+| `app/src/main/AndroidManifest.xml` | `MusicPlaybackService` + new (non-exported) `ExtractionService` |
+| `app/src/main/res/values/strings.xml` | `playback_notification_channel` |
+| `app/src/main/java/com/example/MainActivity.kt` | pre-warm the engine from `onStart()` (best effort) |
+| `app/src/main/java/com/example/data/remote/innertube/InnerTubeApiClient.kt` | comment reference updated |
+| `app/src/test/java/com/example/data/remote/extraction/*.kt` | **new** - 20 unit tests (pure JVM) |
+| `progress.md` | this file |
+
+Not touched: Room/DB, downloads, playlists, favourites, history, lyrics, voice commands,
+trending rails, Compose UI/onboarding, theme, app id/version/signing, CI workflow.
 
 ---
 
