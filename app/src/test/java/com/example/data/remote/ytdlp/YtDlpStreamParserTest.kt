@@ -44,7 +44,7 @@ class YtDlpStreamParserTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun watchUrlRefusesAnInvalidId() {
-        YtDlpStreamParser.watchUrl("not-a-video")
+        YtDlpStreamParser.watchUrl("too-short")
     }
 
     @Test
@@ -119,7 +119,16 @@ class YtDlpStreamParserTest {
             "audio/mpeg",
             YtDlpStreamParser.toStreamInfo(audioUrl, null, "mp3", null)?.mimeType
         )
-        assertNull(YtDlpStreamParser.toStreamInfo(audioUrl, null, "bin", null)?.mimeType)
+        // No format id, no extension, and no mime/itag in the URL: the container is
+        // unknown and Media3 will sniff it.
+        assertNull(
+            YtDlpStreamParser.toStreamInfo(
+                "https://rr3---sn-abc.googlevideo.com/videoplayback?expire=1",
+                null,
+                "bin",
+                null
+            )?.mimeType
+        )
     }
 
     @Test
