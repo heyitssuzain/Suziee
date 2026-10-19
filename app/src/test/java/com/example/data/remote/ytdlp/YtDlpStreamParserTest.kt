@@ -159,6 +159,29 @@ class YtDlpStreamParserTest {
     }
 
     @Test
+    fun picksTheUrlEvenWhenYtDlpPrintsANoticeFirst() {
+        val out = """
+            [youtube] a deprecation notice written to stdout
+            https://rr3---sn-abc.googlevideo.com/videoplayback?expire=1&mime=audio%2Fwebm&itag=251
+        """.trimIndent()
+
+        assertEquals(audioUrl, YtDlpStreamParser.pickStreamUrl(out))
+    }
+
+    @Test
+    fun pickStreamUrlRejectsOutputThatContainsNoPlayableUrl() {
+        assertNull(YtDlpStreamParser.pickStreamUrl(null))
+        assertNull(YtDlpStreamParser.pickStreamUrl(""))
+        assertNull(YtDlpStreamParser.pickStreamUrl("ERROR: Video unavailable\n"))
+        assertNull(
+            YtDlpStreamParser.pickStreamUrl(
+                "https://evil.example/videoplayback?itag=251\n" +
+                    "C:\\Users\\me\\yt-dlp.exe"
+            )
+        )
+    }
+
+    @Test
     fun keepsRequiredHeadersAndDropsHopByHopOnes() {
         val headers = mapOf(
             "User-Agent" to "Mozilla/5.0",

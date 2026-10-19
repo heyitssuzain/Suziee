@@ -31,11 +31,16 @@ import java.util.concurrent.atomic.AtomicInteger
  *  * `--get-url` + `--skip-download` resolves the URL without writing media to disk and
  *    without parsing a large JSON document.
  *  * `--no-playlist` prevents a playlist id from turning one tap into a multi-item job.
- *  * `--socket-timeout 5` plus a hard watchdog bound the worst case; the watchdog kills
- *    the child process, so a dead network cannot leave a Python process behind.
+ *  * `--socket-timeout 10` plus a hard per-attempt watchdog bound the worst case; the
+ *    watchdog kills the child process, so a dead network cannot leave a Python process
+ *    behind.
+ *  * `--force-ipv4` avoids the IPv6 route that used to stall the watch-page request for
+ *    ~40 seconds on dual-stack mobile networks before yt-dlp fell back to IPv4.
+ *  * Two clients are tried (`android_vr`, then yt-dlp's default list); either one is
+ *    enough to produce a direct audio URL.
  *  * Initialization (unpacking the bundled Python runtime) runs once on a background
- *    thread. It is awaited, never repeated, and a failure is remembered so it cannot
- *    delay every track.
+ *    thread. It is awaited, and a failure is retried after a minute rather than
+ *    disabling yt-dlp for the life of the process.
  *
  * ## Self-healing
  * YouTube breaks old extractors within weeks. When an extraction fails, a later
@@ -50,8 +55,8 @@ object SuzieeAudioExtractor {
 
     private const val TAG = "SuzieeAudioExtractor"
 
-    /** Hard upper bound for one resolve; yt-dlp's own socket timeout is 5s. */
-    private const val EXTRACTION_TIMEOUT_MS = 7_000L
+    /** Hard upper bound for one yt-dlp client attempt. */
+    private const val EXTRACTION_TIMEOUT_MS = 12_000L
 
     /**
      * Opus (251) first: best quality/size for streaming. AAC (140) is the broadly
@@ -59,9 +64,20 @@ object SuzieeAudioExtractor {
      */
     private const val FORMAT_SELECTOR = "251/140/bestaudio"
 
+    /**
+     * The Android-VR client returns direct `googlevideo` URLs without the SABR-only
+     * payload the web clients now hand out, and does so with the fewest round trips.
+     * `null` means "let yt-dlp pick its default client list", used as the second attempt
+     * so a removed/renamed client can never leave the app with no path at all.
+     */
+    private const val ANDROID_VR_CLIENT = "android_vr"
+
     /** yt-dlp nightly builds track YouTube changes faster than the stable channel. */
     private const val UPDATE_INTERVAL_MS = 7L * 24 * 60 * 60 * 1000
     private const val UPDATE_DELAY_MS = 3_000L
+
+    /** Retry a failed initialization after this long instead of disabling yt-dlp forever. */
+    private const val INIT_RETRY_AFTER_MS = 60_000L
     private const val PREFS = "suziee_ytdlp"
     private const val KEY_LAST_UPDATE_MS = "last_update_ms"
 
@@ -71,9 +87,16 @@ object SuzieeAudioExtractor {
     @Volatile
     private var initialized = false
 
-    /** True once init failed; retrying on every track would only add delay. */
+    /**
+     * When initialization last failed, or `0` if it has not failed. A transient failure
+     * (storage pressure while unpacking Python, for example) is retried after
+     * [INIT_RETRY_AFTER_MS] instead of disabling yt-dlp for the life of the process.
+     */
     @Volatile
-    private var initFailed = false
+    private var initFailedAtMs = 0L
+
+    /** Read-only diagnostic used in failure logs; not a control-flow flag. */
+    val isInitialized: Boolean get() = initialized
 
     /** How many yt-dlp child processes are in flight (used to avoid updating under them). */
     private val activeExtractions = AtomicInteger(0)
@@ -148,8 +171,30 @@ object SuzieeAudioExtractor {
     /**
      * The yt-dlp invocation itself. Runs on an IO thread and blocks there, which is why
      * the watchdog lives in [maintenanceScope] instead of the caller's coroutine.
+     *
+     * Two client attempts, each with its own process and watchdog:
+     *  1. `android_vr` - fastest and returns direct URLs (no SABR);
+     *  2. yt-dlp's default client list - the safety net if the first client is blocked,
+     *     renamed or the video is only offered to another client.
      */
     private fun extract(videoId: String, timeoutMs: Long): StreamInfo? {
+        val clients = listOf(ANDROID_VR_CLIENT, null)
+        clients.forEachIndexed { index, client ->
+            val stream = extractOnce(videoId, timeoutMs, client)
+            if (stream != null) return stream
+            if (index < clients.lastIndex) {
+                Log.i(
+                    TAG,
+                    "yt-dlp client '${client ?: "default"}' produced nothing for $videoId - " +
+                        "retrying with ${clients[index + 1] ?: "default"} clients"
+                )
+            }
+        }
+        return null
+    }
+
+    /** One yt-dlp process for one player client; null when it produced no playable URL. */
+    private fun extractOnce(videoId: String, timeoutMs: Long, playerClient: String?): StreamInfo? {
         val request = YoutubeDLRequest(YtDlpStreamParser.watchUrl(videoId)).apply {
             addOption("-f", FORMAT_SELECTOR)
             // Print the resolved URL only. This is intentionally not --dump-json: the
@@ -159,12 +204,19 @@ object SuzieeAudioExtractor {
             addOption("--skip-download")
             addOption("--no-playlist")
             addOption("--no-warnings")
-            addOption("--socket-timeout", "5")
+            // A broken IPv6 route used to stall the watch-page request for ~40s before
+            // yt-dlp fell back to IPv4. The watchdog then killed it and every song looked
+            // "unplayable" even though the IPv4 path resolves in seconds.
+            addOption("--force-ipv4")
+            addOption("--socket-timeout", "10")
             addOption("--extractor-retries", "1")
+            if (playerClient != null) {
+                addOption("--extractor-args", "youtube:player_client=$playerClient")
+            }
         }
 
         // Must be unique: youtubedl-android rejects a process id that is already running.
-        val processId = "suziee-$videoId-${UUID.randomUUID()}"
+        val processId = "suziee-$videoId-${playerClient ?: "default"}-${UUID.randomUUID()}"
         val startedAt = SystemClock.elapsedRealtime()
 
         val watchdog = maintenanceScope.launch {
@@ -173,17 +225,19 @@ object SuzieeAudioExtractor {
                 YoutubeDL.getInstance().destroyProcessById(processId)
             }.getOrDefault(false)
             if (killed) {
-                Log.w(TAG, "yt-dlp exceeded ${timeoutMs}ms for $videoId - process killed")
+                Log.w(
+                    TAG,
+                    "yt-dlp ($playerClient) exceeded ${timeoutMs}ms for $videoId - process killed"
+                )
             }
         }
 
+        Log.i(TAG, "yt-dlp attempt client=${playerClient ?: "default"} video=$videoId")
         return try {
             val response = YoutubeDL.getInstance().execute(request, processId)
-            // `--no-playlist` + a single-format selector prints exactly one URL. Take the
-            // first non-blank line; the parser then validates it is HTTPS googlevideo.
-            val reportedUrl = response.out.lineSequence()
-                .map { it.trim() }
-                .firstOrNull { it.isNotEmpty() }
+            // `--no-playlist` + a single-format selector prints exactly one URL. Scan the
+            // whole stream anyway: a stray notice must not hide the URL on the next line.
+            val reportedUrl = YtDlpStreamParser.pickStreamUrl(response.out)
 
             val stream = YtDlpStreamParser.toStreamInfo(
                 url = reportedUrl,
@@ -192,11 +246,17 @@ object SuzieeAudioExtractor {
                 headers = null
             )
             if (stream == null) {
-                Log.w(TAG, "yt-dlp returned no playable URL for $videoId (out=${reportedUrl?.take(80)})")
+                Log.w(
+                    TAG,
+                    "yt-dlp ($playerClient) returned no playable URL for $videoId " +
+                        "(out=${response.out.take(160).replace('\n', ' ')} " +
+                        "err=${response.err.take(240).replace('\n', ' ')})"
+                )
             } else {
                 Log.i(
                     TAG,
-                    "yt-dlp resolved $videoId in ${SystemClock.elapsedRealtime() - startedAt}ms " +
+                    "yt-dlp ($playerClient) resolved $videoId in " +
+                        "${SystemClock.elapsedRealtime() - startedAt}ms " +
                         "(mime=${stream.mimeType ?: "sniffed"})"
                 )
             }
@@ -206,7 +266,7 @@ object SuzieeAudioExtractor {
         } catch (e: Throwable) {
             // YoutubeDLException carries yt-dlp's stderr; the message is enough here and
             // avoids dumping a stack trace on every blocked/bot-checked attempt.
-            Log.w(TAG, "yt-dlp failed for $videoId: ${e.message}")
+            Log.w(TAG, "yt-dlp ($playerClient) failed for $videoId: ${e.message}")
             null
         } finally {
             watchdog.cancel()
@@ -219,13 +279,19 @@ object SuzieeAudioExtractor {
         if (initialized) return true
         return initLock.withLock {
             if (initialized) return@withLock true
-            if (initFailed) return@withLock false
+            val failedAt = initFailedAtMs
+            if (failedAt != 0L &&
+                SystemClock.elapsedRealtime() - failedAt < INIT_RETRY_AFTER_MS
+            ) {
+                return@withLock false
+            }
 
             withContext(Dispatchers.IO) {
                 val startedAt = SystemClock.elapsedRealtime()
                 try {
                     YoutubeDL.getInstance().init(context)
                     initialized = true
+                    initFailedAtMs = 0L
                     Log.i(
                         TAG,
                         "yt-dlp core initialized in " +
@@ -235,7 +301,7 @@ object SuzieeAudioExtractor {
                     true
                 } catch (e: Throwable) {
                     // The app still works: the headless WebView is a complete fallback.
-                    initFailed = true
+                    initFailedAtMs = SystemClock.elapsedRealtime()
                     Log.e(TAG, "yt-dlp initialization failed - WebView fallback remains", e)
                     false
                 }

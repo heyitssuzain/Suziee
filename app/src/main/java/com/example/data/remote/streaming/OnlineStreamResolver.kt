@@ -94,7 +94,7 @@ class OnlineStreamResolver(
             val stream = try {
                 if (hedgeDelayMs > 0L) delay(hedgeDelayMs)
                 Log.i(TAG, "Starting WebView fallback for $videoId after ${hedgeDelayMs}ms")
-                engine.resolve(videoId)
+                engine.resolve(videoId, timeoutMs = WEBVIEW_TIMEOUT_MS)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -127,7 +127,8 @@ class OnlineStreamResolver(
             Log.w(
                 TAG,
                 "Neither engine produced a stream for $videoId after " +
-                    "${SystemClock.elapsedRealtime() - startedAt}ms"
+                    "${SystemClock.elapsedRealtime() - startedAt}ms " +
+                    "(yt-dlp initialized=${SuzieeAudioExtractor.isInitialized})"
             )
             null
         } catch (e: CancellationException) {
@@ -151,6 +152,16 @@ class OnlineStreamResolver(
          * runs. When yt-dlp is slow or blocked, the fallback is already working by the
          * time the primary gives up.
          */
-        const val HEDGE_DELAY_MS = 2_500L
+        const val HEDGE_DELAY_MS = 2_000L
+
+        /**
+         * How long the WebView fallback gets once it starts.
+         *
+         * It is a ceiling, not a wait: extraction completes as soon as YouTube's own
+         * player makes the audio request. 8s was too tight on a cold mobile page load
+         * (Chromium start + consent + player boot + media request), which is why the
+         * fallback used to time out on every attempt.
+         */
+        const val WEBVIEW_TIMEOUT_MS = 15_000L
     }
 }

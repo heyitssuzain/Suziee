@@ -37,6 +37,23 @@ internal object YtDlpStreamParser {
     }
 
     /**
+     * Picks the playable URL out of yt-dlp's stdout.
+     *
+     * `--get-url` normally prints exactly one line, but yt-dlp is allowed to print a
+     * notice or a blank line first (for example when a client logs a deprecation note to
+     * stdout). Taking the first non-empty line - the old behaviour - turned such a note
+     * into "no stream" and made playback fail even though a perfectly good URL was on the
+     * next line. Scanning every line for the one URL that passes [isPlayableMediaUrl] is
+     * strict about *what* is accepted while being tolerant about *where* it appears.
+     */
+    fun pickStreamUrl(out: String?): String? {
+        if (out.isNullOrBlank()) return null
+        return out.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { isPlayableMediaUrl(it) }
+    }
+
+    /**
      * Converts the direct URL reported by yt-dlp into a [StreamInfo], or null when it is
      * not something we are willing to hand to ExoPlayer.
      *
