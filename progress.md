@@ -3,15 +3,136 @@
 Date: 19 Oct 2026 · Base: `v1.2-build-21` · Scope: smallest safe changes, no feature removals,
 no data loss, no identity/signing change.
 
-Seven fix passes are recorded here. **Pass 7 (below) is the current, authoritative one**: it
-fixes the "every song fails" regression in build 29 by removing the IPv6 stall that made
-yt-dlp miss its 7-second deadline, and by giving each engine a realistic budget. Pass 6
-introduced the yt-dlp engine; pass 5 tightened identity verification; pass 4 replaced the
-primary extraction source with the pre-warmed headless engine; pass 3 is kept for its
-evidence trail: pass 2 had made official songs *stop playing entirely*, and pass 3 removed
-that regression instead of adding another layer of tightening.
+Eight fix passes are recorded here. **Pass 8 (below) is the current, authoritative one**: it
+removes yt-dlp and the headless WebView entirely and replaces both with a native YouTube
+player-API client that returns direct audio URLs in under a second. Pass 7 fixed the
+"every song fails" regression in build 29 by removing an IPv6 stall that made yt-dlp miss
+its deadline; pass 6 introduced the yt-dlp engine; pass 5 tightened identity verification;
+pass 4 replaced the primary extraction source with the pre-warmed headless engine; pass 3
+is kept for its evidence trail: pass 2 had made official songs *stop playing entirely*, and
+pass 3 removed that regression instead of adding another layer of tightening.
 
 ---
+
+# PASS 8 — WebView cannot play YouTube any more; native player API replaces yt-dlp (build 31)
+
+## The request
+
+Build 30 still showed the same failure on the user's device. The request was to remove
+yt-dlp completely, make the headless WebView the only provider, make it "undetectable",
+block ads, bypass captchas, and start playback within 1.5 s. The first instruction was
+explicit: **test whether the WebView path works for "Attention" by Charlie Puth before
+building on it.**
+
+## The WebView test — it does not work, and this is measurable
+
+I fetched the exact page the WebView loads, with the app's mobile Chrome UA, and parsed
+`ytInitialPlayerResponse`:
+
+| Page | `playabilityStatus` | `adaptiveFormats` | Formats with a direct `url` | SABR URL |
+|---|---|---|---|---|
+| `m.youtube.com/watch?v=nfs8NYg7yQM` (Attention) | `OK` | 25 | **0** | present |
+| `www.youtube.com/watch?v=nfs8NYg7yQM` | `OK` | 22 | **0** | present |
+
+YouTube has moved its web clients to **SABR**: the stream entries carry only
+`serverAbrStreamingUrl`, not a signed `googlevideo.com` URL. ExoPlayer cannot play a SABR
+endpoint, and the old fallback's "early candidate" parser required a `url`, so it correctly
+found nothing. The media requests the page does make are SABR/UMP requests, not progressive
+audio files. **A WebView cannot hand a playable stream to ExoPlayer today.** Making it the
+only provider would have guaranteed that every song kept failing. I did not ship that.
+
+## The provider that does work
+
+The Android-VR player endpoint returns ordinary signed URLs when the request carries the
+visitor data from a normal YouTube page. This is the same client yt-dlp used successfully
+on the PC, but implemented natively in Kotlin — no Python, no QuickJS, no WebView:
+
+1. `GET https://m.youtube.com/` once per session, with a mobile UA, to read
+   `VISITOR_DATA` and `INNERTUBE_API_KEY` from YouTube's bootstrap config.
+2. `POST https://www.youtube.com/youtubei/v1/player` with the `ANDROID_VR` client
+   (`clientName=ANDROID_VR`, version `1.65.10`), the visitor id in both the context and
+   `X-Goog-Visitor-Id`, and the API key in `X-Goog-Api-Key`.
+3. Pick Opus **itag 251** (fallback AAC 140), require an HTTPS `*.googlevideo.com` URL,
+   and hand it to ExoPlayer with the matching Android-VR User-Agent and YouTube Referer.
+4. On a refused/stale session, retry once with the `IOS` client and once after refreshing
+   the visitor data. The session is cached in memory and SharedPreferences for six hours.
+
+The session is pre-warmed in `SuzieeApplication.onCreate`, so a normal tap costs one POST.
+
+## PC verification (exact Kotlin flow) — all passed
+
+`kotlin_flow_probe.py` mirrors the Kotlin request byte-for-byte: home-page visitor fetch,
+then the VR player POST, then a ranged media GET.
+
+| Song | Video id | Player POST | Format | Media GET |
+|---|---|---|---|---|
+| Attention — Charlie Puth | `nfs8NYg7yQM` | 0.76 s | itag 251, `audio/webm` | **206**, 131,072 bytes, `audio/webm` |
+| Love Me Like You Do — Ellie Goulding | `AJtDXIazrMo` | 0.75 s | itag 251 | **206**, 131,072 bytes |
+| Blinding Lights — The Weeknd | `4NRXx6U8ABQ` | 0.72 s | itag 251 | **206**, 131,072 bytes |
+| Shape of You — Ed Sheeran | `JGwWNGJdvx8` | 0.61 s | itag 251 | **206**, 131,072 bytes |
+| Believer — Imagine Dragons | `7wtfhZwyrcc` | 0.66 s | itag 251 | **206**, 131,072 bytes |
+| Perfect — Ed Sheeran | `2Vv-BfVoq4g` | 0.67 s | itag 251 | **206**, 131,072 bytes |
+| Faded — Alan Walker | `60ItHLz5WEA` | 0.62 s | itag 251 | **206**, 131,072 bytes |
+
+The one-time home-page fetch took **1.63 s**. No returned URL contained the `n` throttling
+parameter, and every media response was a real 206 with audio bytes.
+
+## What was removed / changed
+
+* Deleted `data/remote/ytdlp/` (`SuzieeAudioExtractor`, `YtDlpStreamParser`).
+* Deleted `data/remote/extraction/` (`SecureExtractionEngine`, `AudioFormatSelector`,
+  `AudioIdentityPolicy`, `AudioTrafficPolicy`) and `playback/ExtractionService`.
+* Deleted the `youtubedl-android` dependency, the arm64-only `abiFilters`, the legacy
+  JNI packaging, `extractNativeLibs="true"` and the GPL-3.0 notice.
+* Added `innertube/YouTubeAudioResolver.kt` (network) and `YouTubeAudioPolicy.kt` (pure
+  rules) plus 11 unit tests for ids, session parsing, SABR rejection, format preference,
+  MIME normalisation and URL validation.
+* `OnlineStreamResolver` is now a thin wrapper around the one provider;
+  `StreamSource` is `NONE | INNERTUBE | LOCAL`.
+
+## Automated verification (CI run #31, commit `cec4cd9`) — green
+
+`Build APK` and `Run unit tests` both succeeded: **26 tests, 0 failures**, including 11 new
+`YouTubeAudioPolicyTest` cases. Published release **`v1.2-build-31`**, `Suziee.apk`
+**23,835,291 bytes** — **19,110,957 bytes smaller** than build 30 (the Python runtime,
+QuickJS and yt-dlp are gone).
+
+APK inspection (downloaded from the public release):
+
+* no `libpython*`, `libqjs.so`, `youtubedl` or yt-dlp payload;
+* all four ABI folders are back, containing only the two small AndroidX libraries;
+* `classes3.dex` contains `YouTubeAudioResolver` and `YouTubeAudioPolicy`, and contains no
+  `SuzieeAudioExtractor`, `YtDlpStreamParser` or `SecureExtractionEngine`.
+
+## Latency
+
+* Warm session (normal case): **0.61–0.76 s** from tap to a direct URL, plus ExoPlayer's
+  1 s startup buffer.
+* Cold process: the session warm-up takes 1.63 s and runs in the background; a tap made
+  before it finishes waits for it, so the first request can take ~2.3 s.
+* No ads and no captcha page are loaded at all, because the app never loads the YouTube
+  web page or player UI.
+
+## Honest limits
+
+* **"Permanently working" cannot be guaranteed** by any client: YouTube changes its API
+  and can start requiring a PoToken for this client. What is implemented is the strongest
+  anonymous path available today, with a second client and automatic session refresh.
+* Captchas are not "bypassed"; they are avoided because the API request does not load the
+  web UI. If YouTube answers `LOGIN_REQUIRED` for a network, this provider cannot play.
+* **No Android device is available locally.** The PC test proves the exact HTTP flow and
+  the audio bytes; it does not prove on-device ExoPlayer decoding, OEM network behaviour,
+  audible output, lock-screen controls or download writes. Install build 31 and test the
+  two screenshot songs.
+
+If a song still fails, this log tag now names the exact stage:
+
+```
+adb logcat -s YouTubeAudioResolver OnlineStreamResolver PlaybackCoordinator MusicPlayerManager SuzieeMediaService
+```
+
+---
+
 
 # PASS 7 — "every song fails": yt-dlp was being killed before it could answer (build 30)
 
