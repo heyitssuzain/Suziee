@@ -3,13 +3,137 @@
 Date: 19 Oct 2026 · Base: `v1.2-build-21` · Scope: smallest safe changes, no feature removals,
 no data loss, no identity/signing change.
 
-Five fix passes are recorded here. **Pass 5 (below) is the current, authoritative one**: it
-makes it impossible for a *different* recording to be played in place of the requested song
-(transaction tokens + page-drift rejection + a SoundCloud gate that now verifies the
-performer) and adopts the requested class names. Pass 4 (also below) replaced the primary
-extraction source with the pre-warmed headless engine; pass 3 is kept for its evidence trail:
-pass 2 had made official songs *stop playing entirely*, and pass 3 removed that regression
-instead of adding another layer of tightening.
+Six fix passes are recorded here. **Pass 6 (below) is the current, authoritative one**: the
+legacy online-streaming stack has been replaced by **yt-dlp** (`youtubedl-android`) as the
+primary engine, with the headless WebView engine kept as a racing fallback, and this pass is
+the first one shipped as a **green** CI run (build gate enforced). Pass 5 tightened identity
+verification; pass 4 replaced the primary extraction source with the pre-warmed headless
+engine; pass 3 is kept for its evidence trail: pass 2 had made official songs *stop playing
+entirely*, and pass 3 removed that regression instead of adding another layer of tightening.
+
+---
+
+# PASS 6 — yt-dlp primary engine, WebView fallback (build 29)
+
+## What was asked
+
+Replace the legacy streaming providers (SoundCloud included) with yt-dlp as the online
+engine, keep a headless-WebView sniffer as fallback, and ship it without breaking playback,
+downloads, playlists, favourites, lyrics, voice, trending, the notification panel or the
+lock-screen controls. Startup had to stay fast (~1.5 s target) and the APK had to grow by no
+more than about 20 MB.
+
+## What was built
+
+### A. yt-dlp engine — `data/remote/ytdlp/`
+
+* `SuzieeAudioExtractor.kt`
+  * `YoutubeDL.init(context)` on the IO dispatcher, once per process; warmed from
+    `SuzieeApplication` so the first tap does not pay the Python-unpack cost.
+  * One request per tap with `--get-url` (single URL). `--dump-json` was deliberately
+    **not** used: `youtubedl-android` pulls Jackson in as a *runtime-only* dependency, so the
+    `ObjectMapper` type is not on the compile classpath. A `--get-url` line is all the player
+    needs and cannot deserialize a wrong/foreign payload.
+  * Format preference `251/140/bestaudio`, `--no-playlist`, `--socket-timeout 5`,
+    `--extractor-retries 1`, fixed process id so a hung run can be killed.
+  * **7 s watchdog** around the process; on timeout it calls `destroyProcessById`, so a stuck
+    yt-dlp never pins the playback path.
+  * Throttled (7-day) background nightly update, only after a failed extraction and only when
+    no extraction is in flight. No startup update, so launch latency is unaffected.
+* `YtDlpStreamParser.kt` — pure Kotlin (no Android, no network): validates the 11-character
+  video id, the URL scheme/host, rejects manifest/playlist payloads, derives mime/container
+  (`mime=`, `itag=`, extension fallback) and passes through `Referer`/`User-Agent` headers.
+  This is the single "is this playable" gate. 11 unit tests.
+* `OnlineStreamResolver.kt` — races both sources through a `Channel`:
+  * yt-dlp is always started first;
+  * the WebView fallback starts only after `HEDGE_DELAY_MS = 2_500`, so a healthy yt-dlp
+    answer never waits for the sniffer;
+  * the first **usable** stream wins and the loser is cancelled;
+  * after both fail once, the next attempt starts both immediately (no hedge delay).
+
+### B. Playback wiring
+
+* `PlaybackCoordinator` was rewritten around *source identity*: it hands the player exactly
+  one authoritative stream per track and allows **one** mid-playback re-resolve
+  (`claimFailover()`), so a looping failure cannot spin the engines.
+* `MusicPlayerManager` keeps a single player handoff, metadata, media session and error
+  recovery; failures now surface a generic, honest message instead of a fake success.
+* `DownloadManager` takes the shared `OnlineStreamResolver`, so downloads use the same
+  yt-dlp URL as playback. Progressive responses are saved as-is; manifest URLs keep the
+  existing HLS stitching path; WebM extension is handled explicitly.
+* SoundCloud provider and its strict-match test were deleted; `MusicRepository.resolveStreamUrl`
+  removed, so no legacy path can silently win.
+
+### C. Packaging (the size constraint)
+
+* Maven Central artifact `io.github.junkfood02.youtubedl-android:library:0.18.1`
+  (the `com.github.yausername:…:0.14.0` coordinates in the request are the old JitPack
+  build; the maintained artifact is the one tested here).
+* `abiFilters += "arm64-v8a"` **only**. Four ABIs would have added ~60 MB and v7a ~14 MB;
+  arm64 keeps the delta under the cap.
+* `packaging.jniLibs.useLegacyPackaging = true` plus `android:extractNativeLibs="true"`:
+  youtubedl-android reads `libpython.zip.so` from the *extracted* native-library directory,
+  so the default `extractNativeLibs=false` would break Python at runtime.
+* `minSdk 24` already matched the library exactly; no version bump, no identity change.
+
+## Automated verification (CI run #29, commit `7bb7442`) — green, test gate enforced
+
+Every step succeeded, including `Run unit tests`. Check-run annotations (readable without
+GitHub auth) report the per-class JUnit results:
+
+| Test class | tests | failures | errors |
+|---|---|---|---|
+| `YtDlpStreamParserTest` | 11 | 0 | 0 |
+| `AudioFormatSelectorTest` | 14 | 0 | 0 |
+| `VoiceCommandParserTest` | 7 | 0 | 0 |
+| `AudioTrafficPolicyTest` | 6 | 0 | 0 |
+| `AudioIdentityPolicyTest` | 6 | 0 | 0 |
+| `SearchRankingTest` | 6 | 0 | 0 |
+| `ExampleUnitTest` | 1 | 0 | 0 |
+| `ExampleRobolectricTest` | 1 | 0 | 0 |
+
+**52 tests, 0 failures.** Two earlier runs are recorded for honesty: #27 (`c7e582f`) failed
+to compile because of the runtime-only Jackson type (fixed by switching to `--get-url`), and
+#28 (`a12c022`) built and published an APK but was red on two parser assertions (one test id
+was exactly 11 valid characters; one fallback-extension case carried a `mime` it meant to
+omit). Both are fixed in `7bb7442`.
+
+### Published artifact, inspected after download
+
+* Release **`v1.2-build-29`**, asset `Suziee.apk`, **42,945,316 bytes**
+  (`sha256:97c8b642…46752f`). Previous build 26 was 23,851,707 bytes →
+  **+19,093,609 bytes ≈ +18.2 MiB (+19.1 MB)**, inside the "up to 20 MB" budget.
+* Native payload present and **arm64 only**:
+  `lib/arm64-v8a/libpython.zip.so` 14,305,904 B, `libqjs.so` 916,104 B,
+  `libpython.so` 4,384 B; no `armeabi-v7a`/`x86`/`x86_64` directories.
+* The 3,170,726-byte yt-dlp binary is packaged (AGP's resource-path optimization renames it
+  from `res/raw/ytdlp` to a short name, so `R.raw.ytdlp` still resolves at runtime).
+* Release notes record `Built automatically from commit 7bb7442` and *"Signed with the private
+  Suziee release key"*.
+
+## Limitations the user must know
+
+* **arm64 only.** The APK will not install on 32-bit phones or x86/x86_64 emulators. Adding
+  `"armeabi-v7a"` restores those devices at roughly +14 MB.
+* **GPL-3.0.** `youtubedl-android` is GPL-3.0; a distributed APK is a combined work. The
+  app's own `LICENSE` is MIT, so `NOTICE.md` now discloses this. Either adopt GPL-3.0 for the
+  app or drop the library.
+* **No device was available.** Nothing below was heard or seen on hardware: real yt-dlp
+  extraction on a phone, real WebView fallback under bot-detection, audible correctness,
+  startup latency on a mid-range device, notification/lock-screen behaviour after swipe-away.
+  These are **code paths verified by unit tests and inspection**, not device-verified facts.
+
+## Suggested real-device checks
+
+1. Play 2–3 mainstream official songs. Expect `PRIMARY OK: <mime> stream in <ms>`; if yt-dlp
+   fails, `FALLBACK OK: … total <ms>` after the hedge. Filter:
+   `adb logcat -s SuzieeAudioExtractor OnlineStreamResolver PlaybackCoordinator MusicPlayerManager SuzieeMediaService`
+2. Note `First audio ready in <ms>` — this is the real startup latency.
+3. With a paused player, swipe the app away, reopen, play again → notification and lock
+   screen must show title/artwork and working Play/Pause/Next/Previous.
+4. Download one progressive and one HLS-backed track; confirm the file plays offline.
+5. Block notifications in system settings and confirm the app degrades honestly (no crash,
+   no fake "playing" state).
 
 ---
 
