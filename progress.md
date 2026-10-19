@@ -3,13 +3,82 @@
 Date: 19 Oct 2026 · Base: `v1.2-build-21` · Scope: smallest safe changes, no feature removals,
 no data loss, no identity/signing change.
 
-Six fix passes are recorded here. **Pass 6 (below) is the current, authoritative one**: the
-legacy online-streaming stack has been replaced by **yt-dlp** (`youtubedl-android`) as the
-primary engine, with the headless WebView engine kept as a racing fallback, and this pass is
-the first one shipped as a **green** CI run (build gate enforced). Pass 5 tightened identity
-verification; pass 4 replaced the primary extraction source with the pre-warmed headless
-engine; pass 3 is kept for its evidence trail: pass 2 had made official songs *stop playing
-entirely*, and pass 3 removed that regression instead of adding another layer of tightening.
+Seven fix passes are recorded here. **Pass 7 (below) is the current, authoritative one**: it
+fixes the "every song fails" regression in build 29 by removing the IPv6 stall that made
+yt-dlp miss its 7-second deadline, and by giving each engine a realistic budget. Pass 6
+introduced the yt-dlp engine; pass 5 tightened identity verification; pass 4 replaced the
+primary extraction source with the pre-warmed headless engine; pass 3 is kept for its
+evidence trail: pass 2 had made official songs *stop playing entirely*, and pass 3 removed
+that regression instead of adding another layer of tightening.
+
+---
+
+# PASS 7 — "every song fails": yt-dlp was being killed before it could answer (build 30)
+
+## The report
+
+Build 29 showed *"Couldn't play this track. Check your connection and tap retry."* on every
+song, including mainstream, available tracks from the screenshots (`Attention` — Charlie
+Puth, `Love Me Like You Do` — Ellie Goulding). This is the same generic text for both
+"neither engine resolved" and "ExoPlayer rejected the stream", so the first job was to find
+which one it was without a device.
+
+## What the provider test actually showed
+
+I extracted the **exact yt-dlp zipapp bundled in the released APK** (`res/Nc`, yt-dlp
+`2025.11.12`) and ran it on the PC against real YouTube videos, with the app's own flags:
+
+| Test | Result |
+|---|---|
+| default flags (`-f 251/140/bestaudio --get-url --no-playlist --socket-timeout 5`) | **~45 s**, then a URL |
+| same command + `--force-ipv4` | **4.4–5.9 s**, then a URL |
+| `--force-ipv4 --extractor-args youtube:player_client=android_vr` | **3.9–4.9 s** |
+| HTTP GET (range 0–2047) on the returned URL, Chrome-Android UA + YouTube Referer | **206**, `audio/webm`, real bytes |
+| 5 different songs (Attention, Love Me Like You Do, Blinding Lights, Shape of You, Believer) | URL + 206 on all five |
+
+The 45 s is not yt-dlp being slow: it is a **broken IPv6 route** on a dual-stack network.
+yt-dlp waits for that route before falling back to IPv4. The app's old watchdog was **7 s**,
+so it killed every extraction long before the URL arrived; the WebView fallback then has its
+own 8 s ceiling and YouTube's current web player often never emits a plain audio request at
+all. Result: both engines report "nothing", on every track. That matches the screenshots.
+
+## What changed in build 30
+
+* `SuzieeAudioExtractor`
+  * `--force-ipv4` — removes the ~40 s stall (the single biggest fix).
+  * watchdog raised from **7 s to 12 s per client attempt**, with `--socket-timeout 10`
+    and `--extractor-retries 1`.
+  * two attempts: **`android_vr` first** (direct URLs, no SABR-only payload), then yt-dlp's
+    **default client list** as the safety net. Worst case is bounded; the first successful
+    attempt returns immediately.
+  * output parsing now scans **all** stdout lines for the first valid HTTPS
+    `googlevideo` URL, instead of trusting the first non-empty line (a stray notice could
+    previously hide the URL).
+  * failed initialization is retried after **60 s** instead of disabling yt-dlp for the
+    life of the process.
+  * failure logs now include the client, stdout/stderr excerpts and whether init succeeded.
+* `OnlineStreamResolver`
+  * WebView fallback window raised to **15 s** and started after **2 s**.
+  * the final failure log includes `yt-dlp initialized=…`, so a future logcat identifies an
+    init failure immediately.
+
+## Automated verification (CI run #30, commit `2359c94`) — green
+
+`Build APK` and `Run unit tests` both succeeded. **54 tests, 0 failures**, including the two
+new `pickStreamUrl` cases (13 parser tests total). Published release:
+**`v1.2-build-30`**, `Suziee.apk` **42,946,248 bytes** (+932 bytes over build 29).
+
+## Still device-unverified
+
+The PC test proves the bundled provider **does** resolve and serve real audio for the songs
+in the screenshots, and it proves the old deadline was the problem. It cannot prove the
+on-device Python/QuickJS startup time or OEM network behaviour. Install build 30 and play
+the two songs from the screenshots; if anything still fails, the log tags are now enough to
+name the stage:
+
+```
+adb logcat -s SuzieeAudioExtractor OnlineStreamResolver PlaybackCoordinator MusicPlayerManager SuzieeMediaService
+```
 
 ---
 
