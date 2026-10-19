@@ -120,12 +120,22 @@ class MediaPlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
+        // Every media surface (system notification, lock screen, Bluetooth, Android Auto)
+        // reaches the session through here, so this line is the evidence that the session
+        // is actually being published.
+        Log.i(TAG, "Media controller connected: ${controllerInfo.packageName}")
         return mediaSession
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = mediaSession?.player
-        if (player == null || !player.playWhenReady || player.mediaItemCount == 0) {
+        val keepAlive = player != null && player.playWhenReady && player.mediaItemCount > 0
+        Log.i(
+            TAG,
+            "Task removed - keeping service alive=$keepAlive " +
+                "(playWhenReady=${player?.playWhenReady}, items=${player?.mediaItemCount})"
+        )
+        if (!keepAlive) {
             stopSelf()
         }
     }

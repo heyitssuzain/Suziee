@@ -1,6 +1,7 @@
 package com.example
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -88,13 +89,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var voiceRecognizer: VoiceRecognizer
 
     private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* result ignored */ }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            Log.i(TAG, "POST_NOTIFICATIONS request result: granted=$granted")
+            logNotificationSurfaceState()
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
-        requestNotificationPermissionIfNeeded()
 
         val app = application as SuzieeApplication
         playerManager = app.playerManager
@@ -112,23 +114,53 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Requested here rather than in onCreate on purpose: a permission request launched
+        // while the activity is still being created can be dropped by some OEM builds,
+        // which silently left the app without POST_NOTIFICATIONS - and therefore without
+        // the media notification / lock-screen controls. This runs once the activity is
+        // actually started, and the previous failure path (a swallowed exception) is logged.
+        requestNotificationPermissionIfNeeded()
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            val granted = androidx.core.content.ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.POST_NOTIFICATIONS
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                runCatching {
-                    notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                }
-            }
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+            logNotificationSurfaceState()
+            return
         }
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+            this,
+            android.Manifest.permission.POST_NOTIFICATIONS
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            logNotificationSurfaceState()
+            return
+        }
+        runCatching {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }.onFailure {
+            Log.w(TAG, "Could not request POST_NOTIFICATIONS: ${it.message}")
+        }
+    }
+
+    /**
+     * Diagnostic line for the media-notification surfaces: post Android 13 a denied
+     * permission (or a disabled channel) hides the notification even though the
+     * MediaSession and the foreground service are both healthy.
+     */
+    private fun logNotificationSurfaceState() {
+        val enabled = androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()
+        Log.i(TAG, "Notification surfaces: notificationsEnabled=$enabled")
     }
 
     override fun onDestroy() {
         super.onDestroy()
         voiceRecognizer.stopListening()
+    }
+
+    private companion object {
+        private const val TAG = "MainActivity"
     }
 }
 

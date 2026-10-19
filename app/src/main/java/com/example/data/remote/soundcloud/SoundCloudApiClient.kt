@@ -61,11 +61,11 @@ class SoundCloudApiClient {
      * @param allowHls when false only a single progressive file is accepted. Used by the
      * simple downloader fast-path (an HLS playlist is not a file; when we must have one
      * file the HLS route is stitched together by `HlsDownloader` instead).
-     * @param strict when true the candidate must be *verified* as the same recording of
-     * the same song (title + artist identity + close duration, no alternate-version
-     * uploads). Used when SoundCloud stands in for a requested official YouTube
-     * recording: it is better to return null and let the UI show an honest error than to
-     * silently play a fan-made/slowed/cover version of the requested song.
+     * @param strict when true a candidate is refused if it *conflicts* with the request
+     * (decorated version, clearly different song, clearly different length, weak title with
+     * no artist corroboration). Used when SoundCloud stands in for a requested official
+     * YouTube recording. Missing metadata is never a conflict: the previous revision
+     * required positive proof and rejected legitimate songs with it.
      * @return a verified, playable [StreamInfo], or null when nothing suitable was found.
      */
     suspend fun resolve(track: Track, allowHls: Boolean = true, strict: Boolean = false): StreamInfo? =
@@ -102,8 +102,9 @@ class SoundCloudApiClient {
                     if (strict) {
                         Log.w(
                             TAG,
-                            "No candidate passed strict verification for '${track.title}' " +
-                                "by '${track.artist}' - refusing to substitute a different recording"
+                            "No acceptable substitute for '${track.title}' by '${track.artist}' " +
+                                "- every candidate conflicted with the request (wrong song, " +
+                                "decorated version or mismatched length)"
                         )
                     }
                     return@withContext null
@@ -156,9 +157,10 @@ class SoundCloudApiClient {
      * Searches SoundCloud (artist+title, then title alone) and returns acceptable
      * candidates, best match first.
      *
-     * @param strict additionally requires [SoundCloudMatch.isStrictVerifiedMatch] for
-     * every candidate, so a request for an official recording can never fall through to
-     * a different recording of the same song.
+     * @param strict additionally requires [SoundCloudMatch.isAcceptableSubstitute] for every
+     * candidate, so a request for an official recording can never fall through to a
+     * decorated/remixed version or a clearly different song - while candidates that merely
+     * lack metadata are still accepted.
      */
     private fun searchTracks(track: Track, clientId: String, strict: Boolean = false): List<JSONObject> {
         val queries = listOf(
@@ -183,11 +185,12 @@ class SoundCloudApiClient {
 
                 val score = matchScore(track, candidate)
                 if (score < MIN_MATCH_SCORE) continue
-                if (strict && !isStrictVerifiedMatch(track, candidate, score)) {
+                if (strict && !isAcceptableSubstitute(track, candidate)) {
                     Log.i(
                         TAG,
-                        "Strict match rejected '${candidate.optString("title")}' " +
-                            "for '${track.title}'"
+                        "Substitute rejected (conflicts with the request): " +
+                            "'${candidate.optString("title")}' by " +
+                            "'${candidate.optJSONObject("user")?.optString("username").orEmpty()}'"
                     )
                     continue
                 }
@@ -201,16 +204,23 @@ class SoundCloudApiClient {
         return scored.sortedByDescending { it.score }.map { it.track }
     }
 
-    /** Bridges a search hit to the pure, unit-tested verification gate. */
-    private fun isStrictVerifiedMatch(wanted: Track, candidate: JSONObject, score: Double): Boolean =
-        SoundCloudMatch.isStrictVerifiedMatch(
+    /**
+     * Bridges a search hit to the pure, unit-tested substitution gate.
+     *
+     * This is conflict detection, not proof-of-match: it refuses a candidate only when it
+     * is *demonstrably* a different recording (decorated version, different song, very
+     * different length, weak title without artist corroboration). Missing metadata - a
+     * common and normal case - never causes a rejection, which is what made legitimate
+     * official songs unplayable in the previous revision.
+     */
+    private fun isAcceptableSubstitute(wanted: Track, candidate: JSONObject): Boolean =
+        SoundCloudMatch.isAcceptableSubstitute(
             wantedTitle = wanted.title,
             wantedArtist = wanted.artist,
             wantedDurationMs = wanted.durationSeconds * 1000L,
             candidateTitle = candidate.optString("title"),
             candidateUploader = candidate.optJSONObject("user")?.optString("username").orEmpty(),
-            candidateDurationMs = candidate.optLong("duration", 0L),
-            overallScore = score
+            candidateDurationMs = candidate.optLong("duration", 0L)
         )
 
     private fun searchCollection(query: String, clientId: String): JSONArray? {

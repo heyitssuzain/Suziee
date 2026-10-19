@@ -5,25 +5,32 @@ import kotlin.math.abs
 /**
  * Pure (JVM-testable) matching helpers for the SoundCloud fallback.
  *
- * ## Why this exists
- * SoundCloud is a *substitute* source: the audio it returns is a different upload than
- * the official recording the user asked for. The old heuristic only *penalised*
- * alternate versions (remix / slowed / cover ...) and accepted whatever scored highest,
- * so an official-song request could silently play a fan-made recording. Three things are
- * fixed here:
+ * ## Design (rewritten after the "no verified source found" regression)
  *
- *  1. Alternate-version markers are detected on the **raw** title. The old check ran on
- *     the normalised title, which strips parenthesised text - exactly where uploads put
- *     "(Slowed + Reverb)". Those uploads were therefore never penalised at all.
- *  2. [isStrictVerifiedMatch] provides a real verification gate: title, artist identity
- *     and duration must all corroborate, otherwise the caller must show an honest error
- *     instead of playing a different recording.
- *  3. Marker detection and title comparison are word-boundary aware and Unicode aware,
- *     so "De**live**r" is not treated as a live version, and Japanese/CJK titles are
- *     actually comparable (the old normaliser deleted every non-ASCII character, which
- *     made every CJK match score 0.0).
+ * The first version of this file required *positive proof* that a candidate was the same
+ * recording (title + artist + duration + score floor, all of them). That rejected
+ * legitimate songs whenever a needed field was missing - and missing fields are normal:
+ * the plain-YouTube fallback reports `Unknown Artist`/`YouTube Music`, the duration can be
+ * 0, the title can carry decorations - so solving those songs died with
+ * "No verified matching source was found".
  *
- * Nothing here filters results in non-strict (download / non-YouTube) flows.
+ * The gate now works the other way round: **reject only on positive evidence that the
+ * candidate is a different recording.** That keeps the guarantee that matters ("never
+ * silently play an unrelated/slowed/cover version") without requiring metadata that is
+ * often simply absent:
+ *
+ *  - decorated uploads (slowed / reverb / remix / cover / live ...) are rejected unless the
+ *    user explicitly asked for an alternate version,
+ *  - a clearly different title is rejected,
+ *  - a clearly different length is rejected when both sides know their duration,
+ *  - a *weak* title match additionally needs the artist to corroborate (uploader similarity
+ *    or the artist name inside the upload title),
+ *  - everything else - including candidates with missing artist/duration metadata that
+ *    otherwise agree - is accepted.
+ *
+ * Marker detection runs on the raw text (decorations live in parentheses, which
+ * `normalize()` strips) and is word-boundary + Unicode aware, so "Deliver"/"Discover" are
+ * not read as live/cover and CJK titles stay comparable.
  */
 internal object SoundCloudMatch {
 
@@ -44,18 +51,48 @@ internal object SoundCloudMatch {
     private val PLACEHOLDER_ARTISTS =
         listOf("unknown artist", "youtube music", "various artists", "topic", "unknown")
 
-    /** A title-only match must be near-identical when there is no artist to corroborate. */
-    private const val STRICT_MIN_TITLE_SIMILARITY = 0.62
-    private const val STRICT_MIN_TITLE_SIMILARITY_WITHOUT_ARTIST = 0.85
-    private const val STRICT_MIN_ARTIST_SIMILARITY = 0.5
-    private const val STRICT_MIN_MATCH_SCORE = 0.65
-    private const val STRICT_MIN_DURATION_TOLERANCE_MS = 10_000L
-    private const val STRICT_DURATION_TOLERANCE_RATIO = 0.06
+    /** Below this the candidate is a different song, not a different version of it. */
+    private const val REJECT_TITLE_SIMILARITY = 0.45
+
+    /** At or above this the title alone is trusted (artist corroboration not required). */
+    private const val TRUSTED_TITLE_SIMILARITY = 0.75
+
+    /** Duration tolerance when both sides know their duration. */
+    private const val MIN_DURATION_TOLERANCE_MS = 15_000L
+    private const val DURATION_TOLERANCE_RATIO = 0.10
+
+    /** Uploader similarity that counts as "same artist". */
+    private const val ARTIST_SIMILARITY_THRESHOLD = 0.5
+
+    /**
+     * Filler words that surround an alternate-version marker ("Believer Slowed **and**
+     * Reverb"). Removed together with the marker so an explicit request for a slowed
+     * version still compares equal to a plain upload of the same song.
+     */
+    private val MARKER_CONNECTORS = listOf("and", "version", "mix", "edit", "audio", "with")
 
     /** True when [text] advertises a different recording of the same song. */
     fun hasAlternateVersionMarker(text: String): Boolean {
         if (text.isBlank()) return false
         return MARKER_REGEX.containsMatchIn(text.lowercase())
+    }
+
+    /**
+     * Removes alternate-version markers and their filler words from [text].
+     *
+     * Only used when the user *asked* for an alternate version: then the marker words are
+     * expected and must not count as a title mismatch, otherwise the requested slowed
+     * version could never be found.
+     */
+    private fun stripAlternateVersionMarkers(text: String): String {
+        var out = text.lowercase().replace("+", " ").replace("&", " ")
+        for (marker in ALTERNATE_VERSION_MARKERS) {
+            out = out.replace(Regex("\\b" + Regex.escape(marker) + "\\b"), " ")
+        }
+        for (connector in MARKER_CONNECTORS) {
+            out = out.replace(Regex("\\b" + Regex.escape(connector) + "\\b"), " ")
+        }
+        return out
     }
 
     /** Word-boundary check for a single marker (used for the weighted score penalties). */
@@ -71,59 +108,79 @@ internal object SoundCloudMatch {
         return normalised.isBlank() || PLACEHOLDER_ARTISTS.any { it == normalised }
     }
 
+    /** True when the user's own request already asks for an alternate version. */
+    fun requestsAlternateVersion(wantedTitle: String, wantedArtist: String): Boolean =
+        hasAlternateVersionMarker(wantedTitle) || hasAlternateVersionMarker(wantedArtist)
+
     /**
-     * The strict gate used when SoundCloud is standing in for a requested official
-     * recording. Returns true only when the candidate is demonstrably the same song by
-     * the same artist with a matching length.
+     * The substitution gate used when SoundCloud stands in for a requested
+     * YouTube-catalogue recording.
+     *
+     * @return true when there is **no positive evidence** that the candidate is a
+     * different recording. Missing metadata never causes a rejection on its own.
      */
-    fun isStrictVerifiedMatch(
+    fun isAcceptableSubstitute(
         wantedTitle: String,
         wantedArtist: String,
         wantedDurationMs: Long,
         candidateTitle: String,
         candidateUploader: String,
-        candidateDurationMs: Long,
-        overallScore: Double
+        candidateDurationMs: Long
     ): Boolean {
-        val requestedAlternate =
-            hasAlternateVersionMarker(wantedTitle) || hasAlternateVersionMarker(wantedArtist)
-
-        // 1. A decorated upload may never stand in for a plain official request.
+        // 1. A decorated upload is a different recording - unless that is what was asked for.
+        val requestedAlternate = requestsAlternateVersion(wantedTitle, wantedArtist)
         if (!requestedAlternate) {
             if (hasAlternateVersionMarker(candidateTitle)) return false
             if (hasAlternateVersionMarker(candidateUploader)) return false
         }
 
-        // 2. The title must clearly be the requested song.
-        val artistUsable = !isPlaceholderArtist(wantedArtist)
-        val titleThreshold =
-            if (artistUsable) STRICT_MIN_TITLE_SIMILARITY
-            else STRICT_MIN_TITLE_SIMILARITY_WITHOUT_ARTIST
-        val titleSimilarity = similarity(normalize(wantedTitle), normalize(candidateTitle))
-        if (titleSimilarity < titleThreshold) return false
+        // When an alternate version was requested the marker words are expected, so they
+        // are removed from both sides before comparing the song titles.
+        val wantedForCompare =
+            if (requestedAlternate) stripAlternateVersionMarkers(wantedTitle) else wantedTitle
+        val candidateForCompare =
+            if (requestedAlternate) stripAlternateVersionMarkers(candidateTitle) else candidateTitle
 
-        // 3. The artist must be corroborated - by the uploader name, or by appearing in
-        //    the upload title (how official/label uploads are usually named).
-        if (artistUsable) {
-            val artistSimilarity = similarity(normalize(wantedArtist), normalize(candidateUploader))
-            val artistTokens = normalize(wantedArtist).split(' ').filter { it.length > 2 }
-            val artistInTitle =
-                artistTokens.isNotEmpty() &&
-                    artistTokens.any { normalize(candidateTitle).contains(it) }
-            if (artistSimilarity < STRICT_MIN_ARTIST_SIMILARITY && !artistInTitle) return false
-        }
+        val titleSimilarity =
+            similarity(normalize(wantedForCompare), normalize(candidateForCompare))
 
-        // 4. Length must line up closely (both sides known and in the same ballpark).
+        // 2. Clearly a different song.
+        if (titleSimilarity < REJECT_TITLE_SIMILARITY) return false
+
+        // 3. Clearly a different length (only judged when both sides know it).
         if (wantedDurationMs > 0L && candidateDurationMs > 0L) {
             val tolerance = maxOf(
-                STRICT_MIN_DURATION_TOLERANCE_MS,
-                (wantedDurationMs * STRICT_DURATION_TOLERANCE_RATIO).toLong()
+                MIN_DURATION_TOLERANCE_MS,
+                (wantedDurationMs * DURATION_TOLERANCE_RATIO).toLong()
             )
             if (abs(candidateDurationMs - wantedDurationMs) > tolerance) return false
         }
 
-        // 5. Overall confidence.
-        return overallScore >= STRICT_MIN_MATCH_SCORE
+        // 4. A weak title match needs the artist to corroborate it. Missing artist
+        //    metadata is not a conflict - it simply cannot contribute evidence.
+        if (titleSimilarity < TRUSTED_TITLE_SIMILARITY && !isPlaceholderArtist(wantedArtist)) {
+            if (!artistCorroborates(wantedArtist, candidateTitle, candidateUploader)) return false
+        }
+
+        return true
+    }
+
+    /**
+     * True when [wantedArtist] shows up as the uploader (fuzzy) or inside the upload title.
+     * Callers only invoke this when the artist is a real, comparable name.
+     */
+    fun artistCorroborates(
+        wantedArtist: String,
+        candidateTitle: String,
+        candidateUploader: String
+    ): Boolean {
+        val uploaderSimilarity = similarity(normalize(wantedArtist), normalize(candidateUploader))
+        if (uploaderSimilarity >= ARTIST_SIMILARITY_THRESHOLD) return true
+        if (candidateUploader.isBlank() && candidateTitle.isBlank()) return true
+
+        val artistTokens = normalize(wantedArtist).split(' ').filter { it.length > 2 }
+        return artistTokens.isNotEmpty() &&
+            artistTokens.any { normalize(candidateTitle).contains(it) }
     }
 
     /**

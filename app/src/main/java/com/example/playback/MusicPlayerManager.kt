@@ -31,6 +31,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -178,6 +180,9 @@ class MusicPlayerManager(
     /** Guards the SoundCloud failover so we only escalate once per track. */
     private var soundCloudTriedForCurrentTrack = false
 
+    /** When the current request was made; used to log startup latency. */
+    private var requestStartedAtMs = 0L
+
     /** Guards the "one automatic re-resolve after a mid-playback error" behaviour. */
     private var transientRetryUsed = false
 
@@ -208,6 +213,17 @@ class MusicPlayerManager(
                     }
                     Player.STATE_READY -> {
                         val duration = exoPlayer.duration.coerceAtLeast(0L)
+                        // Startup latency evidence: how long the user waited between tapping
+                        // the song and the player being ready to produce audio.
+                        if (requestStartedAtMs > 0L) {
+                            Log.i(
+                                TAG,
+                                "First audio ready in " +
+                                    "${SystemClock.elapsedRealtime() - requestStartedAtMs}ms " +
+                                    "(source=$currentSource)"
+                            )
+                            requestStartedAtMs = 0L
+                        }
                         _playbackState.update {
                             it.copy(
                                 isLoading = false,
@@ -287,7 +303,7 @@ class MusicPlayerManager(
     private fun unplayableMessage(track: Track): String =
         if (looksLikeYouTubeVideoId(track.id)) {
             "Couldn't play the official recording of this song. " +
-                "No verified matching source was found - tap retry."
+                "No acceptable matching source was found - tap retry."
         } else {
             "Couldn't play this track. Check your connection and tap retry."
         }
@@ -321,6 +337,9 @@ class MusicPlayerManager(
         val targetQueue = if (_playbackState.value.isShuffle) queue.shuffled() else queue
         val index = targetQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
 
+        // Start of the user-visible latency window (used by the startup timing logs).
+        requestStartedAtMs = SystemClock.elapsedRealtime()
+
         _playbackState.update {
             it.copy(
                 queue = targetQueue,
@@ -345,7 +364,9 @@ class MusicPlayerManager(
      *     session. It is the only thing that can produce a working (n-transformed)
      *     googlevideo URL, because YouTube's `n` challenge must be solved by their own JS.
      *  3. **FALLBACK - SoundCloud public API**: used automatically when the sniffer does
-     *     not capture a stream inside `YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS` (5s).
+     *     not capture a stream inside `YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS` (8s). It is
+     *     resolved in parallel (hedged) once the sniffer has been running for
+     *     `FALLBACK_HEDGE_DELAY_MS`, so a sniffer failure does not add a second wait.
      *
      * The custom native UI is untouched by all of this: it simply observes
      * [PlaybackState.isLoading], which stays true from the moment a song is tapped until
@@ -363,9 +384,18 @@ class MusicPlayerManager(
             try {
                 _playbackState.update { it.copy(isLoading = true, errorMessage = null) }
 
-                // Record to history (best effort - never block or crash playback).
-                runCatching { repository.recordPlayed(track) }
-                    .onFailure { Log.w(TAG, "Failed to record play history: ${it.message}") }
+                // Bring the media session service up as soon as a track is selected, not
+                // only once a stream URL exists: the session then already exists when
+                // playback starts, so the notification/lock-screen surfaces cannot miss the
+                // first update. Idempotent (see ensurePlaybackServiceStarted).
+                ensurePlaybackServiceStarted()
+
+                // Record to history off the critical path: a DB write must never delay
+                // resolution or playback. Failures are logged, nothing more.
+                scope.launch {
+                    runCatching { repository.recordPlayed(track) }
+                        .onFailure { Log.w(TAG, "Failed to record play history: ${it.message}") }
+                }
 
                 // 1. Local, already-downloaded track.
                 val localFile = track.localFilePath
@@ -417,13 +447,38 @@ class MusicPlayerManager(
      */
     private suspend fun resolveRemoteStream(track: Track, useSniffer: Boolean): StreamInfo? {
         // A YouTube id means the user asked for a specific catalogue recording. If the
-        // sniffer cannot produce it, SoundCloud may only be used as a *verified* match -
-        // never as an unchecked substitute (that is how wrong/duplicate audio appeared).
+        // sniffer cannot produce it, SoundCloud may only be used as an acceptable
+        // substitute - never an unrelated/slowed/cover recording.
         val officialRequest = looksLikeYouTubeVideoId(track.id)
 
         if (useSniffer && officialRequest) {
             Log.i(TAG, "PRIMARY: sniffing YouTube via headless WebView (${track.id})")
             val startedAt = SystemClock.elapsedRealtime()
+
+            // Hedged request: the fallback resolve is started in the background while the
+            // sniffer is still working, but only after HEDGE_DELAY_MS - so a normal, fast
+            // sniffer (usually well under 2s) costs no extra network call at all, while a
+            // slow/failing sniffer no longer pays for the fallback *after* its 8s window.
+            // Only resolution is parallel; playback stays strictly single-source.
+            // Scoped to the current resolve job so selecting another track cancels it too.
+            val hedgedFallback = CoroutineScope(currentCoroutineContext()).async {
+                try {
+                    delay(FALLBACK_HEDGE_DELAY_MS)
+                    Log.i(
+                        TAG,
+                        "HEDGE: sniffer still unresolved after ${FALLBACK_HEDGE_DELAY_MS}ms - " +
+                            "resolving SoundCloud in parallel"
+                    )
+                    resolveSoundCloudWithRetry(track, strict = officialRequest)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Never let the hedge fail the resolve job: the sniffer may still win.
+                    Log.w(TAG, "Hedged fallback failed: ${e.message}")
+                    null
+                }
+            }
+
             // CRITICAL for cross-device reliability: a WebView that is missing, disabled or
             // outdated (very common on a friend's phone) throws while being constructed. If
             // that exception escaped, the SoundCloud fallback below would never run and the
@@ -431,62 +486,92 @@ class MusicPlayerManager(
             val sniffed = try {
                 YouTubeWebViewSniffer(context).sniff(track.id)
             } catch (e: CancellationException) {
+                hedgedFallback.cancel()
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Sniffer unavailable on this device (${e.message}) - using fallback")
                 null
             }
             val elapsed = SystemClock.elapsedRealtime() - startedAt
+
             if (sniffed != null) {
                 currentSource = StreamSource.YOUTUBE_SNIFFER
+                // The primary won: drop the hedged fallback (it is usually still waiting on
+                // its delay, so this normally also avoids the extra request entirely).
+                hedgedFallback.cancel()
                 Log.i(
                     TAG,
-                    "PRIMARY OK: verified ${sniffed.mimeType ?: "media"} stream in ${elapsed}ms"
+                    "PRIMARY OK: ${sniffed.mimeType ?: "media"} stream in ${elapsed}ms"
                 )
                 return sniffed
             }
+
             Log.w(
                 TAG,
-                "PRIMARY FAILED: sniffer gave no verified stream after ${elapsed}ms " +
-                    "(window ${YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS}ms) - " +
-                    "falling back to SoundCloud (strict=$officialRequest)"
+                "PRIMARY FAILED: sniffer gave no stream after ${elapsed}ms " +
+                    "(window ${YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS}ms) - using hedged " +
+                    "SoundCloud fallback (strict=$officialRequest)"
             )
+
+            val fallback = try {
+                hedgedFallback.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Hedged fallback failed: ${e.message}")
+                null
+            }
+            if (fallback != null) {
+                currentSource = StreamSource.SOUNDCLOUD
+                Log.i(
+                    TAG,
+                    "FALLBACK OK: SoundCloud stream - total "
+                        + "${SystemClock.elapsedRealtime() - startedAt}ms after tap"
+                )
+            }
+            return fallback
         }
 
-        return resolveSoundCloudWithRetry(track, strict = officialRequest)
+        val fallback = resolveSoundCloudWithRetry(track, strict = officialRequest)
+        if (fallback != null) currentSource = StreamSource.SOUNDCLOUD
+        return fallback
     }
 
     /**
-     * SoundCloud fallback with a few retries and backoff.
+     * SoundCloud fallback with a bounded retry.
      *
-     * Resolving is a handful of small HTTP calls, so retrying is cheap and it means a slow
-     * or briefly flaky connection produces a slightly longer "buffering" state instead of
-     * an immediate failure.
+     * Deliberately short: the previous revision retried three times with a linear backoff,
+     * which added up to ~2.7s of pure waiting *after* the 8s sniffer window had already
+     * elapsed. Two attempts with a 400ms pause keeps one retry for a flaky connection
+     * without turning a failure into a multi-second stall. It also does **not** touch
+     * [currentSource] - the caller owns that, because during a hedged resolve this method
+     * can complete while the sniffer is still the source we are about to play.
      *
-     * @param strict requires a verified same-recording match (see
-     * [com.example.data.repository.MusicRepository.resolveStreamUrl]). When strict is on
-     * and nothing verifies, this returns null on purpose: the caller shows an honest
-     * error instead of playing a different recording.
+     * @param strict applies the substitution gate (see
+     * [com.example.data.repository.MusicRepository.resolveStreamUrl]). When on and nothing
+     * acceptable is found, it returns null on purpose: the caller shows an honest error
+     * instead of playing a different recording.
      */
     private suspend fun resolveSoundCloudWithRetry(track: Track, strict: Boolean): StreamInfo? {
-        for (attempt in 0 until SOUNDCLOUD_ATTEMPTS) {
+        var attempt = 0
+        while (attempt < SOUNDCLOUD_ATTEMPTS) {
+            attempt++
             val stream = try {
                 repository.resolveStreamUrl(track, strict = strict).getOrNull()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "SoundCloud resolve attempt ${attempt + 1} failed: ${e.message}")
+                Log.w(TAG, "SoundCloud resolve attempt $attempt failed: ${e.message}")
                 null
             }
 
             if (stream != null && stream.url.isNotBlank()) {
-                currentSource = StreamSource.SOUNDCLOUD
-                Log.i(TAG, "FALLBACK OK: SoundCloud stream (strict=$strict, attempt ${attempt + 1})")
+                Log.i(TAG, "SoundCloud stream resolved (strict=$strict, attempt $attempt)")
                 return stream
             }
 
-            if (attempt < SOUNDCLOUD_ATTEMPTS - 1) {
-                delay(SOUNDCLOUD_RETRY_BACKOFF_MS * (attempt + 1))
+            if (attempt < SOUNDCLOUD_ATTEMPTS) {
+                delay(SOUNDCLOUD_RETRY_BACKOFF_MS)
             }
         }
         return null
@@ -824,11 +909,20 @@ class MusicPlayerManager(
     companion object {
         private const val TAG = "MusicPlayerManager"
 
-        /** How many times the cheap SoundCloud fallback is retried before giving up. */
-        private const val SOUNDCLOUD_ATTEMPTS = 3
+        /** How many times the cheap SoundCloud fallback is tried before giving up. */
+        private const val SOUNDCLOUD_ATTEMPTS = 2
 
-        /** Linear backoff between SoundCloud attempts (attempt 1 waits 900ms, etc.). */
-        private const val SOUNDCLOUD_RETRY_BACKOFF_MS = 900L
+        /** Pause between SoundCloud attempts. Kept short - it is pure user-visible delay. */
+        private const val SOUNDCLOUD_RETRY_BACKOFF_MS = 400L
+
+        /**
+         * How long the sniffer gets before the fallback resolve is started in parallel.
+         *
+         * A normal sniff resolves well inside this, so the hedge usually never fires and
+         * costs nothing at all. It only matters when the sniffer is slow or failing, where
+         * it removes the second full wait from the user's startup time.
+         */
+        private const val FALLBACK_HEDGE_DELAY_MS = 3_000L
 
         /** Step used by the notification's seek-back / seek-forward buttons. */
         private const val SEEK_INCREMENT_MS = 10_000L

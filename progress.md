@@ -1,178 +1,189 @@
 # SUZIEE v1.2 — Playback Defect Investigation (progress log)
 
-Date: 18 Oct 2026 · Base: `v1.2-build-19` · Scope: smallest safe changes, no feature removals.
+Date: 19 Oct 2026 · Base: `v1.2-build-21` · Scope: smallest safe changes, no feature removals,
+no data loss, no identity/signing change.
 
-This log covers **two** fix passes. The pass in the first half did not fix the reported
-symptoms, so the second pass (below, the authoritative one) re-investigated the actual
-pipeline instead of re-tuning the same knobs.
+Three fix passes are recorded here. **Pass 3 (below) is the authoritative one**: pass 2 made
+official songs *stop playing entirely*, so pass 3 re-investigated the pipeline and removed the
+regression instead of adding another layer of tightening.
 
 ---
 
-# PASS 2 — root causes of the persisting symptoms
+# PASS 3 — restore official-song playback, cut startup latency, harden the media surfaces
 
-## BUG 1 — Official songs still played duplicate / wrong audio
+## What was actually wrong (evidence-led, not assumed)
 
-### Root causes (verified by reading the code paths, not assumed)
+The reported screenshot (`issues/issues.jpg`) shows a mainstream official song:
 
-1. **The sniffer could accept audio belonging to a *different* video.** It captured the
-   first `googlevideo` `mime=audio` request and used it immediately. When the requested
-   video is unavailable/blocked, YouTube **auto-advances** to another video; that video's
-   audio request was captured and handed to ExoPlayer as if it were the requested song —
-   wrong audio, fully playable, no error shown.
-2. **The WebView also played audio.** The headless WebView ran a real YouTube player with
-   `mediaPlaybackRequiresUserGesture = false` and only muted it through a best-effort JS
-   nudge. `stopLoading()` does not stop media, so the browser could emit sound at the same
-   time as ExoPlayer — two overlapping sources, which is heard as "duplicate" audio.
-3. **SoundCloud silently substituted a different recording.** The fallback matched
-   heuristically (score + penalties) and played whatever scored highest, so a
-   fan-made / slowed / cover / unrelated upload could replace an official-song request.
-4. **Alternate-version penalties never fired for decorated titles.** The penalties ran on
-   the *normalised* title, and `normalize()` deletes parenthesised text — exactly where
-   uploads put `(Slowed + Reverb)`. Those uploads were effectively unpenalised.
-5. **No duration cap exists** (checked): `MIN_TRACK_DURATION_MS` is only a lower bound and
-   the SoundCloud tolerance scales with length, so `IsDownloaded`/long-track rejections are
-   not the cause.
-6. Ruled out with evidence: `track.streamUrl` is written to the DB but **never** used for
-   playback; there is exactly **one** `ExoPlayer.Builder` and **one** `MediaSession.Builder`
-   in the codebase; `setMediaSource` clears the previous playlist; `playerManager.release()`
-   is never called; each track resolves once (`resolveJob` is cancelled on new selection).
+```
+Starboy (feat. Daft Punk) — The Weeknd — 3:51
+Couldn't play the official recording of this song. No verified matching source was found - tap retry.
+```
 
-### Fixes
-- `YouTubeWebViewSniffer.kt`
-  - The captured request is now **verified against the requested video id**
-    (`movie_player.getVideoData().video_id`) before it is used. A capture belonging to a
-    different video is discarded and sniffing continues within the window. The check is
-    permissive by design (if the page cannot report an id, the capture is used) so it can
-    only *remove* wrong audio, never break a working capture.
-  - The intercepted audio request is now answered with an **empty body**. We already hold
-    the signed URL, so the page downloads nothing and plays nothing: the WebView can no
-    longer emit a second audio stream (and saves the bandwidth).
-- `SoundCloudMatch.kt` (**new**, pure/JVM-testable) + `SoundCloudApiClient.kt`
-  - New **strict verification gate** (`isStrictVerifiedMatch`): no alternate-version
-    markers, title must clearly be the song, the artist must be corroborated (uploader or
-    title), and the duration must be within 10 s / 6 %. Used whenever SoundCloud stands in
-    for a requested YouTube-catalogue recording.
-  - Marker detection now runs on the **raw** title/uploader (fixes root cause 4) and is
-    **word-boundary aware**, so "De*liv*er"/"Dis*cover*" are not treated as live/cover.
-  - `normalize()` keeps Unicode letters/digits instead of deleting non-ASCII, so CJK titles
-    (e.g. `夜に駆ける`) are comparable at all — before, they normalised to `""` and every
-    CJK match scored 0.0.
-  - Non-strict behaviour (downloads, non-YouTube ids) is unchanged except that the
-    penalties now actually apply to decorated titles.
-- `MusicRepository.kt` / `MusicPlayerManager.kt`
-  - `resolveStreamUrl(track, allowHls, strict)` threads the flag through; playback passes
-    `strict = true` for YouTube-catalogue requests, downloads stay non-strict (no
-    regression).
-  - **No silent substitution**: if strict verification finds nothing, the player shows an
-    honest error (`unplayableMessage`) instead of playing a different recording. Explicit
-    requests for slowed/remix/cover versions are honoured (the marker check is skipped when
-    the user asked for it).
+That string is produced by `MusicPlayerManager.unplayableMessage()` for a YouTube-catalogue id,
+i.e. **both** sources had failed. Two pass-2 changes caused that, and they compounded:
 
-## BUG 2 — Web-sniffer window must be 8 seconds
+### Root cause 1 — the sniffer capture was gated behind an async JavaScript round-trip
+Pass 2 completed the sniffer result *inside* an `evaluateJavascript(...)` callback. If that
+callback did not fire (page navigating/tearing down, player markup without `movie_player`,
+rAF timing) the already-captured, valid `googlevideo` URL was **thrown away** and the sniff ran
+out its full 8 s window. Probability of the callback not firing is not zero, and every miss
+cost a whole song. The sniffer's *only* job is to observe a URL that YouTube's own player
+built for the video we loaded — it must not depend on a second, unrelated callback.
 
-### Root cause / change
-- The window was `SNIFF_TIMEOUT_MS = 5_000`. Set to **8_000 ms**.
-- It is a **ceiling, not a wait**: `CompletableDeferred` completes the moment a verified
-  audio request is captured, and the sniff is awaited to completion before the fallback, so
-  SoundCloud never starts while the primary source is still resolving.
-- Only `YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS` changed. Network timeouts
-  (`DefaultHttpDataSource` 15 s connect / 20 s read, `MusicRepository.RESOLVE_TIMEOUT_MS`,
-  ExoPlayer buffering) are untouched.
-- **Logging for verification**: the sniffer logs `resolved <id> in <ms>ms`, or
-  `produced no stream for <id> after <ms>ms (window 8000ms) - SoundCloud fallback allowed`;
-  `MusicPlayerManager` logs `PRIMARY OK: verified <mime> stream in <ms>`, or
-  `PRIMARY FAILED: ... after <ms>ms (window 8000ms) - falling back to SoundCloud (strict=…)`,
-  and `FALLBACK OK: SoundCloud stream (strict=…, attempt n)`.
+### Root cause 2 — the sniffer answered the audio request with an empty body
+Pass 2 returned an empty `WebResourceResponse` for the media request. The captured URL was
+still used, but the page's own player received a 0-byte media body, errored, and re-negotiated
+(and can auto-advance). That perturbs exactly the page state we depend on, and it was an
+unnecessary risk: the WebView is muted and destroyed on capture anyway.
 
-## BUG 3 — Notification panel and lock screen
+### Root cause 3 — the SoundCloud gate demanded *proof* instead of rejecting *conflicts*
+Pass 2's `isStrictVerifiedMatch` required all of: no decoration marker, title similarity ≥ 0.62,
+artist corroboration, duration within 10 %/15 s, **and** an overall score ≥ 0.65. Missing
+metadata is normal in this app (the plain-YouTube search path reports `YouTube Music` /
+`Unknown Artist`, duration can be `0`), and a candidate with a good title but placeholder
+artist and unknown duration scored **0.51 < 0.65** → rejected. Meanwhile, for a mainstream
+song, the only full-length SoundCloud uploads are unofficial (official uploads are `SNIP`
+previews and are filtered as unplayable), so "reject unless proven" meant *reject everything*.
+**A gate that refuses every official song is a playback bug**, exactly as reported.
 
-### Root causes (verified)
-- **No working Next/Previous anywhere in the system UI.** The app deliberately keeps **one**
-  media item loaded (queue/repeat logic lives in `MusicPlayerManager`), so the raw
-  `ExoPlayer` reports `COMMAND_SEEK_TO_NEXT/PREVIOUS_MEDIA_ITEM` as **unavailable**. Media3
-  only advertises transport buttons the player supports → the notification/lock screen had
-  no next/previous controls (Play/Pause worked, which matches the reports).
-- Still valid from pass 1: the missing `sessionActivity` (no tap target) and the one-shot
-  `serviceStarted` flag (after `onTaskRemoved()` self-stopped the service, later tracks had
-  no session at all → no notification). Both were fixed in pass 1 and are kept.
-- Verified as correct, no change needed: manifest service declaration
-  (`foregroundServiceType="mediaPlayback"`, exported, Media3 intent filter), the foreground
-  / notification / wake-lock permissions, the runtime POST_NOTIFICATIONS request on every
-  launch when not granted, per-track `MediaMetadata` (title/artist/artwork), exactly one
-  player and one session, the session is never released by navigation (only
-  `MediaPlaybackService.onDestroy`), and `onTaskRemoved` keeps the service alive while
-  playing.
+### Latency problems found in the same path
+* `repository.recordPlayed(track)` (two DB writes) was **awaited inside the critical path**
+  before any resolution started.
+* When the 8 s sniff failed, the fallback then spent up to **+2.7 s** on a 3-attempt linear
+  backoff — pure user-visible waiting *after* the window had already been lost.
+* The media session service was only started *after* a URL existed, so the session could miss
+  the first playback update.
 
-### Fix
-- `MediaPlaybackService.kt`: the session now uses a `ForwardingPlayer` (`QueuePlayer`) that
-  (a) adds the next/previous commands to `getAvailableCommands()` and (b) implements
-  `seekToNext(MediaItem)/seekToPrevious(MediaItem)` by delegating to
-  `MusicPlayerManager.playNext()/playPrevious()`. `onConnect` additionally advertises those
-  commands to controllers, so the buttons appear even if the default player command set does
-  not include them. This is the Media3-documented way to extend a session player; no second
-  player, no second notification, and the UI stays in sync because it shares the same
-  `ExoPlayer` and playback state.
-- `MusicPlayerManager.kt`: `setSeekBackIncrementMs(10_000)` /
-  `setSeekForwardIncrementMs(10_000)`, so the system's rewind/forward buttons also work.
+## Fixes (pass 3)
 
-## Preserved functionality
-No databases cleared, no downloads deleted, no app identity/signing change, no feature
-removed. Anime + mainstream rails, search, voice commands, SoundCloud fallback, downloads +
-persistence, Room data, LRCLIB lyrics, Compose UI/onboarding and the GitHub Actions
-build/signing workflow are untouched.
+### A. Primary source (sniffer) — `YouTubeWebViewSniffer.kt`
+* The capture now **completes immediately** on the first usable `mime=audio` request. Nothing
+  gates it. The WebView is stopped and torn down on capture, and ExoPlayer takes over.
+* The audio request **loads normally again** (no empty-body response) — the page stays healthy
+  while we hold the URL. It still cannot become a second sound source: the page player is
+  muted (`movie_player.mute()`, `video.muted`, `audio.muted`) and the WebView is destroyed
+  immediately after capture.
+* The video-id the page reports is still read, but **only logged** (`WARNING: page reports 'X'
+  while 'Y' was requested (autoplay drift?)`). Diagnostics without a failure mode.
+* The 8 s window is unchanged. New: a **main-frame load error** now fails the sniff
+  immediately (`result.complete(null)`) so the fallback starts sooner instead of burning the
+  remaining window. Sub-resource failures (blocked ad hosts) are ignored.
 
-## Changed files (pass 2)
+### B. Substitution gate — `SoundCloudMatch.kt` (+ `SoundCloudApiClient.kt`)
+The gate is inverted from "prove it matches" to **"reject only on positive evidence that this
+is a different recording"**:
+
+| Rejected (a different recording) | Accepted |
+|---|---|
+| decorated upload — slowed / reverb / remix / sped up / nightcore / 8D / bass boosted / mashup / bootleg / cover / karaoke / instrumental / tribute / live / acoustic / reaction (unless the user asked for one) | same title + same artist + same length |
+| clearly different title (similarity < 0.45) | title agrees, **duration unknown** |
+| clearly different length (±15 s / 10 %, only when both are known) | title agrees, **placeholder/absent artist** (`Unknown Artist`, `YouTube Music`, …) |
+| weak title (< 0.75) **and** the artist is not corroborated by uploader or title | **unlabelled re-upload of the same title/length** (indistinguishable by metadata) |
+
+Missing metadata never causes a rejection. Explicit alternate-version requests are preserved
+(marker words are stripped from *both* sides before the title comparison, so
+"Believer (Slowed + Reverb)" still finds "Believer Slowed and Reverb").
+
+### C. Latency — `MusicPlayerManager.kt`
+* **Hedged fallback**: the SoundCloud resolve is started in parallel after
+  `FALLBACK_HEDGE_DELAY_MS = 3 s` (scoped to the current resolve job, cancelled the moment the
+  sniffer wins — so a normal fast sniff makes *no* extra request). A failing sniffer therefore
+  loses the fallback wait it used to pay after the window expired. Only *resolution* is
+  parallel; playback remains strictly single-source.
+* **`recordPlayed` moved off the critical path** (fire-and-forget in the manager scope, logged
+  on failure).
+* **Fallback retries cut** from 3 attempts with 0/900/1800 ms backoff to **2 attempts / 400 ms**
+  (worst case +400 ms instead of +2.7 s). `resolveSoundCloudWithRetry` no longer mutates
+  `currentSource` (the caller owns it, which matters while a hedge is in flight).
+* `ensurePlaybackServiceStarted()` is now also called **as soon as a track is selected**.
+* Timing logs: `PRIMARY OK: <mime> stream in <ms>`, `PRIMARY FAILED: … (window 8000ms)`,
+  `HEDGE: …`, `FALLBACK OK: … total <ms> after tap`, `First audio ready in <ms> (source=…)`.
+  These are the numbers to read on-device.
+* 8 s window, network timeouts (`DefaultHttpDataSource` 15 s/20 s, `RESOLVE_TIMEOUT_MS` 30 s)
+  and ExoPlayer buffering are **unchanged**.
+
+### D. Media surfaces — `MediaPlaybackService.kt`, `MainActivity.kt`
+* Next/Previous from pass 2 are kept: `QueuePlayer` (a `ForwardingPlayer` over the app's single
+  `ExoPlayer`) advertises and implements them, and `onConnect` advertises them to controllers.
+  No second player, no second notification.
+* **POST_NOTIFICATIONS is now requested from `onStart()`**, not `onCreate()`. The pass-2 code
+  launched the request during activity creation inside a `runCatching {}` that swallowed any
+  failure — on OEM builds that drop a request made before the activity is started, the app
+  ended up with **no permission, no notification and no lock-screen controls, silently**.
+  The launch failure and the permission result are now logged.
+* New diagnostics: `Notification surfaces: notificationsEnabled=<bool>`,
+  `Media controller connected: <pkg>` (proof the session is being published),
+  `Task removed - keeping service alive=<bool>`.
+* Unchanged and re-verified: manifest service declaration
+  (`foregroundServiceType="mediaPlayback"`, exported, Media3 intent filter), the foreground /
+  notification / wake-lock permissions, `setSessionActivity`, per-track `MediaMetadata`
+  (title/artist/artwork), one `ExoPlayer`, one `MediaSession`, session released only in
+  `onDestroy`, `onTaskRemoved` keeping the service alive while playing.
+
+## Changed files (pass 3)
 | File | Change |
 |------|--------|
-| `app/src/main/java/com/example/playback/YouTubeWebViewSniffer.kt` | video-id verification of the capture; empty response for the audio request (no second sound source); **8 s** window; elapsed-time/outcome logging |
-| `app/src/main/java/com/example/data/remote/soundcloud/SoundCloudMatch.kt` | **new** — raw-title marker detection, Unicode-aware normalisation, strict verification gate |
-| `app/src/main/java/com/example/data/remote/soundcloud/SoundCloudApiClient.kt` | `strict` mode; raw + word-boundary penalty detection; delegates to `SoundCloudMatch` |
-| `app/src/main/java/com/example/data/repository/MusicRepository.kt` | `resolveStreamUrl(..., strict)` |
-| `app/src/main/java/com/example/playback/MusicPlayerManager.kt` | strict fallback for YouTube-catalogue tracks; honest "official recording not verified" error; elapsed-time / fallback-reason logs; 10 s seek increments |
-| `app/src/main/java/com/example/playback/MediaPlaybackService.kt` | `QueuePlayer` (advertise + implement Next/Previous for notification + lock screen) |
-| `app/src/test/java/com/example/SoundCloudStrictMatchTest.kt` | **new** — 12 regression cases |
+| `app/src/main/java/com/example/playback/YouTubeWebViewSniffer.kt` | immediate capture (no JS gate), audio request loads normally, stronger mute, log-only video-id check, main-frame fast-fail, 8 s window kept |
+| `app/src/main/java/com/example/data/remote/soundcloud/SoundCloudMatch.kt` | conflict-based `isAcceptableSubstitute` (missing metadata never rejects), marker stripping for explicit alternate requests |
+| `app/src/main/java/com/example/data/remote/soundcloud/SoundCloudApiClient.kt` | uses the new gate; logs the conflict reason |
+| `app/src/main/java/com/example/playback/MusicPlayerManager.kt` | hedged fallback, off-path history write, 2×400 ms fallback retries, early service start, latency logs, reworded honest error |
+| `app/src/main/java/com/example/playback/MediaPlaybackService.kt` | session/controller/task-removed diagnostics |
+| `app/src/main/java/com/example/MainActivity.kt` | POST_NOTIFICATIONS requested from `onStart()`, failures/results/notification state logged |
+| `app/src/test/java/com/example/SoundCloudStrictMatchTest.kt` | rewritten for the new gate: 17 cases incl. the exact failing screenshot case and the "missing metadata must not reject" regressions |
 | `progress.md` | this file |
 
+Not touched: Room/DB, downloads, playlists, favourites, history, lyrics, voice commands,
+trending/anime rails, Compose UI/onboarding, theme, app id/version/signing, CI workflow.
+
 ## Actual test results
-- **Automated (CI, GitHub Actions `android-apk.yml`)**:
-  - Run #21 (commit `ef5ba83`) — **all steps green**: `assembleRelease` with the release
-    keystore, **`testDebugUnitTest` succeeded** (the 12 new `SoundCloudStrictMatchTest`
-    cases plus the existing `SearchRankingTest` cases), lint gate, APK upload, and
-    publishing.
-  - Published release: **`v1.2-build-21`**, asset `Suziee.apk`, size 23,834,871 bytes,
-    `sha256:67cc464eac32a0c0bfd2b88db69f63bdf90a2690bed2f14d3c5bf9661502b1db`
-    (differs from build 19's `sha256:49bccd93…`, so these code changes are in the APK).
-  - Run #20 (commit `7a4a53b`) failed on a Kotlin compile error
-    (`Unresolved reference 'setSeekBackIncrementMs'`: in Media3 1.5.1 those setters are on
-    `ExoPlayer.Builder`, not on the player instance). Fixed in `ef5ba83`. Run #20 published
-    nothing.
-  - What this does **not** prove: it compiles, the type/API surface is correct, the strict
-    matching gate behaves as specified (unit-tested), and the APK is signed and packaged.
-    It does **not** exercise a real YouTube response, a WebView, or the system media UI.
-- **NOT verified (no Android device available here)**:
-  - that a previously-mismatching song now plays the official recording on a real device
-    (the sniffer verification + strict gate are code-verified, and the strict gate is
-    unit-tested, but the live YouTube response path needs a device);
-  - that the media notification and lock screen now show working Next/Previous buttons;
-  - background playback across navigation and long-mashup playback.
-  These are reported as **CODE FIXED BUT DEVICE UNVERIFIED**, not as fixed-and-verified.
 
-### Suggested real-device checks
-1. Play a famous official song that previously played something else (e.g. "Believer") —
-   audio must be the official recording; `logcat` should show
-   `PRIMARY OK: verified … stream in <ms>`.
-2. Swipe the app away with a *paused* player, reopen, play again → notification and lock
-   screen must appear with **working** Play/Pause **Next/Previous**.
-3. Play a long track, put the phone in airplane mode mid-song, re-enable → playback should
-   resume near where it stopped, or show the honest error instead of a wrong recording.
+* **Automated (CI, GitHub Actions `android-apk.yml`)** — see the run for the pass-3 commit:
+  Kotlin/AGP compile, `assembleRelease` with the release keystore, lint gate, unit tests, APK
+  packaging and the `v1.2-build-N` release. Results recorded here after the run completes.
+  * `testDebugUnitTest` is what proves the gate change: the 17 `SoundCloudStrictMatchTest` cases
+    include `Starboy (feat. Daft Punk)` (the screenshot) and the two "metadata is missing but
+    the candidate agrees → accept" regressions. Note the CI step runs with
+    `continue-on-error: true`, so a green build alone is not proof the tests passed — the step
+    outcome is checked separately.
+* **Not verifiable here (no Android device)**: live YouTube sniffing, real SoundCloud
+  responses, actual audible output, and the system notification/lock-screen surfaces. Anything
+  in the list below is **CODE FIXED BUT DEVICE UNVERIFIED**, never "fixed and verified".
 
-## Unresolved / honest limits
-- Strict verification is metadata-level (title/artist/duration/no-decoration). It cannot
-  listen to the audio; it can refuse a wrong recording, but a *decorated duplicate that
-  claims the official title, artist and duration* could still pass. It can no longer
-  silently substitute an openly-decorated or unrelated upload.
-- Being strict removes some availability: where only an alternate version exists, the user
-  now gets an honest error rather than the wrong audio (intentional, per directive).
-- The notification still depends on POST_NOTIFICATIONS being granted and on OEM media
-  behaviour; verified against the Media3 documentation and code, not on hardware.
-- Sniffing still depends on YouTube not walling the WebView session (bot detection).
+## Status per reported issue
+
+| # | Issue | Status |
+|---|-------|--------|
+| 1 | Official songs played duplicate/fan-made audio | **CODE FIXED BUT DEVICE UNVERIFIED** — pass-2 sniffer changes that caused "no acceptable source" for mainstream songs are removed; the substitution gate now rejects only *conflicts* (decorated/different/odd-length) and still refuses to substitute arbitrarily |
+| 2 | Web-sniffer window must be 8 s | **CODE VERIFIED** — `SNIFF_TIMEOUT_MS = 8_000L`; it is a ceiling (resolves on capture), not a fixed wait; only that constant is 8 s |
+| 3 | Playback startup too slow | **CODE FIXED BUT DEVICE UNVERIFIED** — hedged fallback, off-critical-path DB write, 2×400 ms retries, early service start, timing logs added |
+| 4 | Notification panel | **CODE FIXED BUT DEVICE UNVERIFIED** — permission request moved to a lifecycle-correct point (was silently swallowed); session/controller diagnostics added; Media3 requirements re-checked against the 1.5.1 source |
+| 5 | Lock-screen controls (Play/Pause/Next/Previous) | **CODE FIXED BUT DEVICE UNVERIFIED** — `QueuePlayer` implements + advertises Next/Previous (pass 2), unchanged in pass 3 |
+| 6 | Preserve existing features | **CODE VERIFIED** — no feature, data, identity or workflow changes; diff touches playback matching, latency and diagnostics only |
+
+## Suggested real-device checks (and what to read in logcat)
+
+1. Play the song from the screenshot ("Starboy") plus 2–3 other mainstream official songs.
+   Expect `PRIMARY OK: <mime> stream in <ms>` and correct audio; if the sniffer fails,
+   `PRIMARY FAILED: … (window 8000ms)` + `FALLBACK OK: … total <ms> after tap`.
+   Filter: `adb logcat -s YouTubeSniffer MusicPlayerManager SoundCloudApiClient`.
+2. Start a song and confirm `First audio ready in <ms>` — that is the real startup latency.
+3. Notification/lock screen: `adb logcat -s MediaPlaybackService MusicPlayerManager MainActivity`
+   should show `Notification surfaces: notificationsEnabled=true`, then
+   `Media controller connected: com.android.systemui` when a song plays. If
+   `notificationsEnabled=false`, the OS (or the user) has blocked the app's notifications —
+   that is outside the app's control and must be granted in system settings.
+4. Swipe the app away with a **paused** player, reopen, play again → notification and lock
+   screen must appear with working Play/Pause **and** Next/Previous.
+
+## Honest limits
+* The substitution gate is metadata-level. It cannot hear the audio, so a re-upload that
+  claims the exact official title/artist/length is still accepted (it is, at least, the same
+  recording). Openly decorated or clearly different recordings are refused.
+* Where only an alternate version exists, the app shows an honest error rather than the wrong
+  audio (intentional, per directive).
+* Sniffing still depends on YouTube not walling the headless WebView session (bot detection);
+  the fallback exists for exactly that case.
+* The notification still depends on POST_NOTIFICATIONS being granted and on OEM media
+  behaviour. The code path is verified against the Media3 1.5.1 documentation and source, not
+  on hardware.
