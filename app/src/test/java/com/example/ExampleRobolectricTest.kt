@@ -9,7 +9,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+// compileSdk / targetSdk are 36, but Robolectric's SDK 36 sandbox requires a **Java 21**
+// runtime and CI builds and tests on JDK 17, so the sandbox is pinned to an SDK level that
+// runs everywhere. This only affects the fake Android environment of this example test.
+@Config(sdk = [34])
 class ExampleRobolectricTest {
 
   @Test

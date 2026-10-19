@@ -163,6 +163,15 @@ trending/anime rails, Compose UI/onboarding, theme, app id/version/signing, CI w
   * The CI unit-test step is now a **real gate**: `continue-on-error` removed, output
     captured to `test.log`, and failures re-emitted as `::error::` annotations (readable
     without GitHub auth) so a red run is diagnosable.
+  * **Run #23** (commit `5d9dbca`) — first run with the real gate, and it correctly went
+    **red**: `:app:testDebugUnitTest` failed on the pre-existing `ExampleRobolectricTest`
+    (`Failed to create a Robolectric sandbox: Android SDK 36 requires Java 21 (have Java
+    17)`). That test pins `@Config(sdk = [36])` while CI builds on JDK 17, so the whole unit
+    test task had been failing all along — exactly what `continue-on-error` had been hiding.
+    Build/lint/APK/release steps were green; `v1.2-build-23` was published anyway.
+    Fix: the sandbox is pinned to SDK 34 (the release build stays on JDK 17), and the results
+    step now also publishes per-class test counts (`::notice::TESTRESULT <class> tests=…
+    failures=…`) so which tests actually ran is verifiable without authenticated logs.
   * Latest run for the current commit: see the `v1.2-build-N` release of the newest push —
     build, lint, tests, packaging and publishing outcomes are recorded there.
 * **Not verifiable here (no Android device)**: live YouTube sniffing, real SoundCloud
