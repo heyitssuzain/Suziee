@@ -85,12 +85,26 @@ stream, and adding a second HTTP stack would not change which recording is playe
 notification is still rendered by Media3 from the active `MediaItem` (we log the transitions
 rather than re-rendering by hand, which would fight Media3's own notification manager).
 
-## Automated verification (CI run for commit `e615f77`+ this pass) — test gate enforced
-`SoundCloudStrictMatchTest` grew from 21 to **26** cases (the cover, the same-title different
-song, the official-looking channel, the fan channel, the blank uploader) and
-`AudioIdentityPolicyTest` adds **6** cases (drift reject, unknown-report accept, quoted/`null`
-cleaning). Everything else is unchanged and still green. Exact per-class counts are published
-as `::notice::TESTRESULT …` annotations on the run (readable without GitHub auth).
+## Automated verification (CI run #26, commit `2bc5322`) — green, test gate enforced
+Every step succeeded, including the blocking `testDebugUnitTest` step. The per-class results,
+read straight from the JUnit XML as `::notice::TESTRESULT …` annotations (no GitHub auth
+needed):
+
+| Test class | tests | failures | errors |
+|---|---|---|---|
+| `SoundCloudStrictMatchTest` (the substitute gate; grew this pass) | 26 | 0 | 0 |
+| `AudioIdentityPolicyTest` (**new** this pass: drift reject, unknown-report accept, cleaning) | 6 | 0 | 0 |
+| `AudioFormatSelectorTest` | 14 | 0 | 0 |
+| `AudioTrafficPolicyTest` | 6 | 0 | 0 |
+| `VoiceCommandParserTest` | 7 | 0 | 0 |
+| `SearchRankingTest` | 6 | 0 | 0 |
+| `ExampleRobolectricTest` / `ExampleUnitTest` | 1 / 1 | 0 | 0 |
+
+**67 tests, 0 failures.** Release **`v1.2-build-26`** published: `Suziee.apk`
+23,851,707 bytes, `sha256:285ae6d405d2f161674b1d4d94c4ac0cf5576df1e5543c324690762a75a22c89`
+(different from build 25's `29bd99f3…`, so the new code really is in the asset), notes confirm
+`Built automatically from commit 2bc5322 (workflow run #26)` and *"Signed with the private
+Suziee release key"*.
 
 **Still device-unverified:** audible output, live extraction, real startup latency, the
 notification/lock-screen surfaces and how often the primary engine actually wins on the
