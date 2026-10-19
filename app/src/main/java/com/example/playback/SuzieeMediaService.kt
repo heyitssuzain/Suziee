@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.util.Log
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -32,9 +33,13 @@ import com.example.SuzieeApplication
  *    Media3's own notification manager, so we configure the channel/notification instead.
  *  * `onGetSession` publishes the same session to every controller, which is what makes the
  *    lock-screen controls work.
+ *  * Every media item carries complete metadata (title/artist/artwork) and the notification
+ *    is driven by the active item, so artwork, text and audio can never drift apart. The
+ *    [Player.Listener.onMediaItemTransition] hook below logs the exact item every surface is
+ *    showing, which is the evidence trail if that ever looks wrong on a device.
  */
 @UnstableApi
-class MusicPlaybackService : MediaSessionService() {
+class SuzieeMediaService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
 
@@ -87,6 +92,23 @@ class MusicPlaybackService : MediaSessionService() {
             }
             mediaSession = builder.build()
             Log.i(TAG, "MediaSession created - notification/lock-screen controls active")
+
+            // Metadata synchronisation evidence. Media3 renders the notification from the
+            // active MediaItem, and every item MusicPlayerManager builds is complete before
+            // it is handed over - this listener records the exact title/artist/artwork the
+            // system surfaces are showing, so a mismatched notification or a missing lock
+            // screen entry can be diagnosed from the log alone.
+            mediaSession?.player?.addListener(object : Player.Listener {
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    val metadata = mediaItem?.mediaMetadata
+                    Log.i(
+                        TAG,
+                        "MediaItem transition (reason=$reason): '${metadata?.title}' by " +
+                            "'${metadata?.artist}' " +
+                            (if (metadata?.artworkUri != null) "artwork=yes" else "artwork=none")
+                    )
+                }
+            })
         } catch (e: Exception) {
             // Never let a session/notification problem take the whole app down.
             Log.e(TAG, "Failed to create MediaSession: ${e.message}", e)
@@ -196,7 +218,7 @@ class MusicPlaybackService : MediaSessionService() {
     }
 
     companion object {
-        private const val TAG = "MusicPlaybackService"
+        private const val TAG = "SuzieeMediaService"
 
         /** Dedicated channel for the playback controls (see onCreate). */
         private const val NOTIFICATION_CHANNEL_ID = "suziee_playback"

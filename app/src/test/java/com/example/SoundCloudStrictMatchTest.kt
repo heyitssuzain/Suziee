@@ -99,16 +99,90 @@ class SoundCloudStrictMatchTest {
     }
 
     @Test
-    fun `accepts an unlabelled upload that agrees on title and length`() {
-        // A re-upload of the official audio with an unknown uploader name is
-        // indistinguishable from the official audio by metadata alone - and it is the
-        // same recording. Only *labelled* alternate versions are refused.
+    fun `rejects an unlabelled upload from a named non-artist channel`() {
+        // THE FIX for "the official song plays wrong audio": an upload that matches title
+        // and length exactly, but is published by a channel that is demonstrably not the
+        // requested artist, is somebody else's recording (a cover, a re-upload, or a
+        // different song that merely shares the title). It must never be played in place of
+        // the requested official recording - an honest error is better.
         val acceptable = SoundCloudMatch.isAcceptableSubstitute(
             wantedTitle = "Believer",
             wantedArtist = "Imagine Dragons",
             wantedDurationMs = 204_000L,
             candidateTitle = "Believer",
             candidateUploader = "RandomGuy",
+            candidateDurationMs = 204_000L
+        )
+        assertFalse(acceptable)
+    }
+
+    @Test
+    fun `rejects an unlabelled cover that shares the exact official title`() {
+        // "(Cover)" never appears in these titles - the only evidence is that a named
+        // channel other than the artist published it.
+        val acceptable = SoundCloudMatch.isAcceptableSubstitute(
+            wantedTitle = "Attention",
+            wantedArtist = "Charlie Puth",
+            wantedDurationMs = 209_000L,
+            candidateTitle = "Attention",
+            candidateUploader = "CoversByMike",
+            candidateDurationMs = 209_000L
+        )
+        assertFalse(acceptable)
+    }
+
+    @Test
+    fun `rejects a different song that merely shares the title`() {
+        // SoundCloud has many unrelated tracks named after a hit. Matching a title is not
+        // matching a song, so a named uploader that is not the artist is a conflict.
+        val acceptable = SoundCloudMatch.isAcceptableSubstitute(
+            wantedTitle = "Attention",
+            wantedArtist = "Charlie Puth",
+            wantedDurationMs = 209_000L,
+            candidateTitle = "Attention",
+            candidateUploader = "Someone Else",
+            candidateDurationMs = 205_000L
+        )
+        assertFalse(acceptable)
+    }
+
+    @Test
+    fun `accepts a blank uploader that agrees on title and length`() {
+        // Missing metadata (no uploader name at all) is not evidence of anything, so it
+        // must not reject an otherwise consistent candidate. Only a *named* non-artist
+        // uploader is treated as a different performer.
+        val acceptable = SoundCloudMatch.isAcceptableSubstitute(
+            wantedTitle = "Believer",
+            wantedArtist = "Imagine Dragons",
+            wantedDurationMs = 204_000L,
+            candidateTitle = "Believer",
+            candidateUploader = "",
+            candidateDurationMs = 204_000L
+        )
+        assertTrue(acceptable)
+    }
+
+    @Test
+    fun `accepts an official-looking channel that corroborates the artist`() {
+        val acceptable = SoundCloudMatch.isAcceptableSubstitute(
+            wantedTitle = "Believer",
+            wantedArtist = "Imagine Dragons",
+            wantedDurationMs = 204_000L,
+            candidateTitle = "Believer",
+            candidateUploader = "Imagine Dragons - Topic",
+            candidateDurationMs = 204_000L
+        )
+        assertTrue(acceptable)
+    }
+
+    @Test
+    fun `accepts a fan channel whose name contains the artist`() {
+        val acceptable = SoundCloudMatch.isAcceptableSubstitute(
+            wantedTitle = "Believer",
+            wantedArtist = "Imagine Dragons",
+            wantedDurationMs = 204_000L,
+            candidateTitle = "Believer",
+            candidateUploader = "Imagine Dragons Fan Club",
             candidateDurationMs = 204_000L
         )
         assertTrue(acceptable)
@@ -228,14 +302,16 @@ class SoundCloudStrictMatchTest {
 
     @Test
     fun `an ambiguous uploader word alone is not a conflict`() {
-        // "Live Nation" / "Acoustic Covers" style channel names must not reject a plain
-        // upload of the requested song: only conclusive markers are used for the uploader.
+        // "live" is an ambiguous marker word: it describes a different recording in a track
+        // title but is common in channel names, so it must not be the *reason* a candidate
+        // is refused. (The uploader here corroborates the artist, so the performer rule is
+        // satisfied and only the marker rule is under test.)
         val acceptable = SoundCloudMatch.isAcceptableSubstitute(
             wantedTitle = "Believer",
             wantedArtist = "Imagine Dragons",
             wantedDurationMs = 204_000L,
             candidateTitle = "Believer",
-            candidateUploader = "Live Nation",
+            candidateUploader = "Imagine Dragons Live",
             candidateDurationMs = 204_000L
         )
         assertTrue(acceptable)

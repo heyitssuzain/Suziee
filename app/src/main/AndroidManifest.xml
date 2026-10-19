@@ -49,7 +49,7 @@
             a foreground service (type mediaPlayback) while playback is active.
         -->
         <service
-            android:name=".playback.MusicPlaybackService"
+            android:name=".playback.SuzieeMediaService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>

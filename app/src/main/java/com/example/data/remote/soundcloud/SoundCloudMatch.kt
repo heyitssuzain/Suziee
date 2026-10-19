@@ -25,6 +25,11 @@ import kotlin.math.abs
  *    cannot reject the official "Lofi Girl" upload,
  *  - a clearly different title is rejected,
  *  - a clearly different length is rejected when both sides know their duration,
+ *  - a **named uploader that does not corroborate the requested artist** is rejected when the
+ *    request names a real artist. An unlabelled cover, a re-upload under a channel name, or
+ *    an entirely different song that merely *shares the title* all look like this, and that
+ *    is exactly the substitution this gate exists to stop ("Attention" by somebody else is
+ *    not "Attention" by the artist the user asked for),
  *  - a *weak* title match additionally needs the artist to corroborate (uploader similarity
  *    or the artist name inside the upload title),
  *  - everything else - including candidates with missing artist/duration metadata that
@@ -134,7 +139,9 @@ internal object SoundCloudMatch {
      * YouTube-catalogue recording.
      *
      * @return true when there is **no positive evidence** that the candidate is a
-     * different recording. Missing metadata never causes a rejection on its own.
+     * different recording. Missing metadata (a blank uploader, an unknown duration) never
+     * causes a rejection on its own, but a *named* uploader that is not the requested
+     * artist does reject.
      */
     fun isAcceptableSubstitute(
         wantedTitle: String,
@@ -188,10 +195,22 @@ internal object SoundCloudMatch {
             if (abs(candidateDurationMs - wantedDurationMs) > tolerance) return false
         }
 
-        // 4. A weak title match needs the artist to corroborate it. Missing artist
-        //    metadata is not a conflict - it simply cannot contribute evidence.
-        if (titleSimilarity < TRUSTED_TITLE_SIMILARITY && !isPlaceholderArtist(wantedArtist)) {
-            if (!artistCorroborates(wantedArtist, candidateTitle, candidateUploader)) return false
+        // 4. Performer verification. Two independent rules, both only about *evidence*,
+        //    never about missing metadata:
+        //    (a) the request names a real artist AND the candidate has a real uploader, and
+        //        that uploader does not corroborate the artist -> the upload is somebody
+        //        else's recording (cover, re-upload under a channel name, or a different
+        //        song that happens to share the title). Reject.
+        //    (b) the uploader is blank, so it carries no evidence either way; then a *weak*
+        //        title still needs the artist name to appear somewhere in the candidate.
+        if (!isPlaceholderArtist(wantedArtist)) {
+            if (candidateUploader.isNotBlank()) {
+                if (!artistCorroborates(wantedArtist, candidateTitle, candidateUploader)) return false
+            } else if (titleSimilarity < TRUSTED_TITLE_SIMILARITY &&
+                !artistCorroborates(wantedArtist, candidateTitle, candidateUploader)
+            ) {
+                return false
+            }
         }
 
         return true

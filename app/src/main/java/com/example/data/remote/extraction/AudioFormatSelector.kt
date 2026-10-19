@@ -4,7 +4,7 @@ package com.example.data.remote.extraction
  * One **audio-only** entry of YouTube's `streamingData.adaptiveFormats`.
  *
  * The page's own player response is parsed inside the WebView's V8 engine (see
- * [HeadlessExtractorRepository]) and only the fields we need are handed to Kotlin as a
+ * [SecureExtractionEngine]) and only the fields we need are handed to Kotlin as a
  * compact, line-delimited record - parsing the whole (multi-hundred-kilobyte) JSON in
  * Kotlin would waste both time and memory on the critical path.
  *

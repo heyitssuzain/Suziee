@@ -28,20 +28,23 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayInputStream
 import java.util.ArrayDeque
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Terminal outcome of one extraction attempt.
  *
- * Exactly one of these is emitted per [HeadlessExtractorRepository.extractionEvents]
+ * Exactly one of these is emitted per [SecureExtractionEngine.extractionEvents]
  * collection, after which the flow completes.
  */
 sealed interface ExtractionEvent {
 
     /**
      * The authoritative result: the fully-signed `googlevideo` audio request the page's own
-     * player just made. Its `n` parameter has been transformed by YouTube's own JavaScript,
-     * which is what makes it play without throttling. Highest confidence.
+     * player just made, and which the engine verified belongs to the requested video. Its
+     * `n` parameter has been transformed by YouTube's own JavaScript, which is what makes it
+     * play without throttling. Highest confidence.
      */
     data class MediaCaptured(val stream: StreamInfo) : ExtractionEvent
 
@@ -50,7 +53,7 @@ sealed interface ExtractionEvent {
      * response (`streamingData.adaptiveFormats`, parsed by the in-page V8 hook). Its URL is
      * session-bound and correct, but its `n` parameter has not necessarily been transformed
      * yet, so it may be throttled. Only used when the signed capture did not arrive inside
-     * [HeadlessExtractorRepository.EARLY_CANDIDATE_GRACE_MS].
+     * [SecureExtractionEngine.EARLY_CANDIDATE_GRACE_MS].
      */
     data class EarlyCandidate(val stream: StreamInfo) : ExtractionEvent
 
@@ -62,10 +65,18 @@ sealed interface ExtractionEvent {
  * The object exposed to the page as `window.SuzieeBridge`.
  *
  * Kept as its own public-facing class (rather than an anonymous object) so the
- * `@JavascriptInterface` methods are unambiguously reflectable, and so nothing but two
- * narrow string sinks is ever reachable from page script.
+ * `@JavascriptInterface` methods are unambiguously reflectable, and so nothing but narrow
+ * string sinks is ever reachable from page script.
+ *
+ * Every call carries the **transaction token** of the extraction session whose hook script
+ * was injected into the document. A call bearing a different token came from a document
+ * this session does not own - typically a pooled WebView's previous page whose timer is
+ * still alive for a few milliseconds during the swap - and is dropped before it can touch
+ * this session. That is the "transaction token pattern": one request, one token, and no
+ * out-of-order track may ever load.
  */
 internal class ExtractionBridge(
+    private val transactionId: String,
     private val formatsSink: (videoId: String, payload: String) -> Unit,
     private val videoIdSink: (String) -> Unit
 ) {
@@ -76,21 +87,23 @@ internal class ExtractionBridge(
      * metadata must never be treated as a mismatch.
      */
     @JavascriptInterface
-    fun onFormats(videoId: String?, payload: String?) {
+    fun onFormats(transactionId: String?, videoId: String?, payload: String?) {
+        if (transactionId != this.transactionId) return
         val body = payload ?: return
         runCatching { formatsSink(videoId.orEmpty(), body) }
     }
 
-    /** Called by the in-page hook with the video id of the player response it parsed. */
+    /** Called by the in-page hook on every tick with the id the player is currently on. */
     @JavascriptInterface
-    fun onVideoId(videoId: String?) {
+    fun onVideoId(transactionId: String?, videoId: String?) {
+        if (transactionId != this.transactionId) return
         val id = videoId ?: return
         runCatching { videoIdSink(id) }
     }
 }
 
 /**
- * PRIMARY SOURCE - pre-warmed headless extraction engine.
+ * PRIMARY SOURCE - pre-warmed, headless extraction engine.
  *
  * ## Why a real browser engine is required
  * The pure HTTP route (call `youtubei/v1/player`, or scrape the watch page and decode
@@ -103,19 +116,33 @@ internal class ExtractionBridge(
  *  1. **Signed media capture (authoritative).** `WebViewClient.shouldInterceptRequest`
  *     sees every request the page makes. The first
  *     `googlevideo.com/.../videoplayback?...mime=audio` request *is* the finished,
- *     `n`-transformed audio stream. It is captured immediately and handed to ExoPlayer.
+ *     `n`-transformed audio stream. It is captured immediately and handed to ExoPlayer -
+ *     **after** it has been validated against the video the page reports playing, so a page
+ *     that drifted to another video (bot interstitial, region block, autoplay) can never
+ *     hand ExoPlayer a different song.
  *  2. **V8 player-response hook (early, lower confidence).** A JavaScript payload is
  *     injected into the page; it wraps `window.fetch` and `XMLHttpRequest` to observe
  *     `/youtubei/v1/player` responses (and polls the player's own retained response
  *     object), parses `streamingData.adaptiveFormats` *inside the V8 engine*, and pushes
  *     only the audio-only entries over a JavaScript bridge. Itag 251 (Opus 160 kbps) is
- *     preferred, then itag 140 (AAC 128 kbps).
+ *     preferred, then itag 140 (AAC 128 kbps). Responses that belong to a different video
+ *     are never published at all.
  *
  * Path 2 normally lands first. The session still waits
  * [EARLY_CANDIDATE_GRACE_MS] for path 1, because path 1 is the one that is guaranteed to
  * be un-throttled; only if the signed capture has not arrived by then is the early
  * candidate used, which shortens the failure path considerably. If ExoPlayer still cannot
  * play it, the normal SoundCloud failover in `MusicPlayerManager` takes over.
+ *
+ * ## Identifying the transaction (no wrong-song playback)
+ *  * every session gets a fresh transaction token, and bridge callbacks that echo any other
+ *    token are dropped,
+ *  * the page continuously reports the video id its player is on; a capture is dropped when
+ *    the page is demonstrably on a *different* video (see [AudioIdentityPolicy]) and the
+ *    page is asked to reload the requested one, at most [MAX_DRIFT_RELOADS] times,
+ *  * a single re-navigation is attempted if nothing at all has been found by
+ *    [RENAVIGATE_AT_MS] - the first page load can land on an interstitial; the deadline is
+ *    never extended.
  *
  * ## Ads
  * Ads in YouTube's presentation layer are never reachable here: only the raw audio
@@ -133,7 +160,7 @@ internal class ExtractionBridge(
  * thread-safe primitives and hand their results to the flow's channel.
  */
 @SuppressLint("SetJavaScriptEnabled")
-class HeadlessExtractorRepository private constructor(private val appContext: Context) {
+class SecureExtractionEngine private constructor(private val appContext: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -142,6 +169,27 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
 
     @Volatile
     private var activeLeases = 0
+
+    /**
+     * Transaction token of the session that currently owns the engine.
+     *
+     * Only one extraction is live at a time (a new song cancels the previous one), so a
+     * capture that arrives while this is *not* its own token belongs to a session the user
+     * has already moved on from and is dropped.
+     */
+    @Volatile
+    private var activeTransactionId: String? = null
+
+    private fun beginTransaction(transactionId: String) {
+        activeTransactionId = transactionId
+    }
+
+    private fun endTransaction(transactionId: String) {
+        if (activeTransactionId == transactionId) activeTransactionId = null
+    }
+
+    private fun isCurrentTransaction(transactionId: String): Boolean =
+        activeTransactionId == transactionId
 
     private val idleReaper = Runnable {
         if (activeLeases == 0 && idlePool.isNotEmpty()) {
@@ -333,11 +381,27 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
         private val requestedVideoId: String,
         private val emit: (ExtractionEvent) -> Unit
     ) {
+        /** This session's transaction token (see [ExtractionBridge]). */
+        val transactionId: String = UUID.randomUUID().toString().replace("-", "").take(8)
+
         private val finished = AtomicBoolean(false)
         private var webView: WebView? = null
         private var hasLease = false
         private var earlyCandidate: AudioFormatCandidate? = null
         private var disposed = false
+
+        /**
+         * Video id the page's own player is on, as last reported by the in-page hook.
+         * `null` until the hook has run; read from WebView worker threads at capture time,
+         * so it is volatile.
+         */
+        @Volatile
+        private var pageVideoId: String? = null
+
+        /** Guards the bounded drift recovery (main thread + bridge thread). */
+        private val driftReloads = AtomicInteger(0)
+
+        private val watchUrl = "$WATCH_URL$requestedVideoId"
 
         /** Fires when the grace window for the early (player-json) candidate elapses. */
         private val acceptEarlyRunnable = Runnable {
@@ -346,16 +410,34 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
             if (finish(ExtractionEvent.EarlyCandidate(stream))) {
                 Log.i(
                     TAG,
-                    "Early player-json candidate accepted (itag=${candidate.itag}, " +
+                    "[$transactionId] Early player-json candidate accepted (itag=${candidate.itag}, " +
                         "${candidate.mimeType}) after ${EARLY_CANDIDATE_GRACE_MS}ms wait for " +
                         "$requestedVideoId - note: its `n` parameter may not be transformed yet"
                 )
             }
         }
 
+        /**
+         * One re-navigation while the deadline still has room for it: the first page load can
+         * land on an interstitial or a half-rendered player, and a fresh load frequently does
+         * not. Skipped whenever anything was already found; the deadline is never extended.
+         */
+        private val renavigateRunnable = Runnable {
+            if (finished.get() || earlyCandidate != null || disposed) return@Runnable
+            val view = webView ?: return@Runnable
+            Log.w(
+                TAG,
+                "[$transactionId] Nothing captured after ${RENAVIGATE_AT_MS}ms - reloading the " +
+                    "watch page once for $requestedVideoId"
+            )
+            runCatching { view.loadUrl(watchUrl) }
+        }
+
         fun start() {
+            beginTransaction(transactionId)
             val view = acquire()
             if (view == null) {
+                endTransaction(transactionId)
                 finish(ExtractionEvent.Failed("no-webview"))
                 return
             }
@@ -364,23 +446,28 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
 
             view.webViewClient = sessionClient()
             // A pooled WebView is reused: drop the previous session's bridge and expose this
-            // session's, so a late callback from an older page can never reach us.
+            // session's, so a late callback from an older page can never reach us. The token
+            // the hook echoes back is the belt-and-braces check on top of that swap.
             view.removeJavascriptInterface(BRIDGE_NAME)
             view.addJavascriptInterface(
                 ExtractionBridge(
+                    transactionId = transactionId,
                     formatsSink = { videoId, payload -> onFormatsPayload(videoId, payload) },
                     videoIdSink = { reported -> onPageVideoId(reported) }
                 ),
                 BRIDGE_NAME
             )
-            Log.i(TAG, "Headless extractor navigating to $WATCH_URL$requestedVideoId")
-            view.loadUrl("$WATCH_URL$requestedVideoId")
+            Log.i(TAG, "[$transactionId] Secure extraction engine navigating to $watchUrl")
+            view.loadUrl(watchUrl)
+            mainHandler.postDelayed(renavigateRunnable, RENAVIGATE_AT_MS)
         }
 
         fun dispose() {
             if (disposed) return
             disposed = true
             mainHandler.removeCallbacks(acceptEarlyRunnable)
+            mainHandler.removeCallbacks(renavigateRunnable)
+            endTransaction(transactionId)
             val view = webView
             webView = null
             if (hasLease) {
@@ -397,31 +484,55 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
         private fun finish(event: ExtractionEvent): Boolean {
             if (!finished.compareAndSet(false, true)) return false
             mainHandler.removeCallbacks(acceptEarlyRunnable)
+            mainHandler.removeCallbacks(renavigateRunnable)
             emit(event)
             return true
         }
 
         /**
          * Path 1: the signed media request. Called from a WebView worker thread, so it only
-         * touches the (thread-safe) channel, an [AtomicBoolean] and `Handler.post` - never
-         * the WebView. Completing the capture synchronously is deliberate: an earlier
-         * revision gated it behind an asynchronous JavaScript round-trip, and every
-         * official song fell through to the fallback whenever that callback was dropped.
+         * touches the (thread-safe) channel, [AtomicBoolean]/[AtomicInteger] and
+         * `Handler.post` - never the WebView. Completing the capture synchronously is
+         * deliberate: an earlier revision gated it behind an asynchronous JavaScript
+         * round-trip, and every official song fell through to the fallback whenever that
+         * callback was dropped.
          */
         fun onAudioRequest(rawUrl: String) {
             if (finished.get()) return
+
+            // Identity validation #1: a capture from a session the user has already moved
+            // on from belongs to another song.
+            if (!isCurrentTransaction(transactionId)) {
+                Log.w(
+                    TAG,
+                    "[$transactionId] Dropping capture - transaction is no longer active " +
+                        "(a newer request owns the engine)"
+                )
+                return
+            }
+
+            // Identity validation #2: the page's own player tells us which video it is on.
+            // A mismatch is positive evidence that this stream is a different song.
+            if (AudioIdentityPolicy.isForeignCapture(requestedVideoId, pageVideoId)) {
+                Log.w(
+                    TAG,
+                    "[$transactionId] Dropping capture - page is on '${pageVideoId}' while " +
+                        "'$requestedVideoId' was requested (drift)"
+                )
+                healDrift()
+                return
+            }
+
             val stream = buildStreamInfo(rawUrl) ?: return
             if (finish(ExtractionEvent.MediaCaptured(stream))) {
                 Log.i(
                     TAG,
-                    "Captured signed audio stream (${stream.mimeType ?: "unknown"}) for " +
-                        "$requestedVideoId"
+                    "[$transactionId] Captured signed audio stream " +
+                        "(${stream.mimeType ?: "unknown"}) for $requestedVideoId"
                 )
                 // The WebView must not stay in the playback path: stop the page load and let
                 // ExoPlayer own playback from here.
                 mainHandler.post { runCatching { webView?.stopLoading() } }
-                // Diagnostics only, never a gate: if the page's own player had drifted to a
-                // different video we want that visible in the log.
                 mainHandler.post { logPlayingVideoId() }
             }
         }
@@ -437,8 +548,8 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
             if (videoId.isNotBlank() && videoId != requestedVideoId) {
                 Log.w(
                     TAG,
-                    "Ignoring early candidate for '$videoId' while '$requestedVideoId' was " +
-                        "requested (stale page callback?)"
+                    "[$transactionId] Ignoring early candidate for '$videoId' while " +
+                        "'$requestedVideoId' was requested (stale page callback?)"
                 )
                 return
             }
@@ -449,7 +560,7 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
                 earlyCandidate = best
                 Log.i(
                     TAG,
-                    "V8 hook: audio-only itag=${best.itag} (${best.mimeType}, " +
+                    "[$transactionId] V8 hook: audio-only itag=${best.itag} (${best.mimeType}, " +
                         "${best.bitrate / 1000}kbps) offered - giving the signed media capture " +
                         "${EARLY_CANDIDATE_GRACE_MS}ms to arrive first"
                 )
@@ -457,14 +568,34 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
             }
         }
 
-        /** Diagnostics only: the video id inside the player response the hook parsed. */
+        /** The page's player reports which video it is on. Also feeds the drift guard. */
         private fun onPageVideoId(reported: String) {
-            if (reported.isBlank() || reported == requestedVideoId) return
-            Log.w(
-                TAG,
-                "WARNING: player response is for '$reported' while '$requestedVideoId' was " +
-                    "requested (autoplay drift?)"
-            )
+            val id = AudioIdentityPolicy.clean(reported)
+            if (id.isEmpty()) return
+            pageVideoId = id
+            if (id != requestedVideoId) {
+                Log.w(
+                    TAG,
+                    "[$transactionId] Page reports '$id' while '$requestedVideoId' was " +
+                        "requested - captures of '$id' will be dropped (drift recovery)"
+                )
+                healDrift()
+            }
+        }
+
+        /**
+         * Bounded drift recovery: ask the page to load the requested video again. At most
+         * [MAX_DRIFT_RELOADS] attempts, and every capture of the foreign video keeps being
+         * dropped in the meantime - so a page that cannot be recovered fails honestly
+         * instead of playing the wrong song.
+         */
+        private fun healDrift() {
+            if (driftReloads.get() >= MAX_DRIFT_RELOADS) return
+            driftReloads.incrementAndGet()
+            mainHandler.post {
+                if (finished.get() || disposed) return@post
+                runCatching { webView?.evaluateJavascript(healScript(requestedVideoId), null) }
+            }
         }
 
         private fun logPlayingVideoId() {
@@ -473,16 +604,12 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
                 if (view == null) return@post
                 runCatching {
                     view.evaluateJavascript(CURRENT_VIDEO_ID_JS) { value ->
-                        val reported = value
-                            ?.trim()
-                            ?.trim('"')
-                            ?.takeIf { it.isNotEmpty() && it != "null" }
-                            ?: return@evaluateJavascript
-                        if (reported != requestedVideoId) {
+                        val reported = AudioIdentityPolicy.clean(value)
+                        if (reported.isNotEmpty() && reported != requestedVideoId) {
                             Log.w(
                                 TAG,
-                                "WARNING: page plays '$reported' while " +
-                                    "'$requestedVideoId' was requested (autoplay drift?)"
+                                "[$transactionId] WARNING: page plays '$reported' while " +
+                                    "'$requestedVideoId' was requested (drift)"
                             )
                         }
                     }
@@ -540,7 +667,7 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
                 if (request?.isForMainFrame != true) return
                 Log.w(
                     TAG,
-                    "Watch page failed to load (code ${error?.errorCode}) - " +
+                    "[$transactionId] Watch page failed to load (code ${error?.errorCode}) - " +
                         "resolving via the fallback immediately"
                 )
                 finish(ExtractionEvent.Failed("page-error-${error?.errorCode}"))
@@ -549,7 +676,7 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
 
         private fun injectHook(view: WebView?) {
             if (view == null || disposed) return
-            runCatching { view.evaluateJavascript(HOOK_SCRIPT, null) }
+            runCatching { view.evaluateJavascript(hookScript(transactionId, requestedVideoId), null) }
         }
 
         private fun nudgePlayer(view: WebView?) {
@@ -614,7 +741,7 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
         WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
 
     companion object {
-        private const val TAG = "HeadlessExtractor"
+        private const val TAG = "SecureExtractionEngine"
 
         /**
          * How long the engine gets to reach the first audio request before the SoundCloud
@@ -635,6 +762,15 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
          */
         const val EARLY_CANDIDATE_GRACE_MS = 2_500L
 
+        /**
+         * When nothing has been captured by then, the watch page is loaded one more time.
+         * Bounded and never extends the deadline: a healthy session has already finished.
+         */
+        private const val RENAVIGATE_AT_MS = 4_000L
+
+        /** Ceiling on how often a page that drifted is asked to reload the requested video. */
+        private const val MAX_DRIFT_RELOADS = 2
+
         /** Warm WebViews kept for reuse. Two covers a track change arriving mid-resolve. */
         private const val POOL_SIZE = 2
 
@@ -654,15 +790,32 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
                 "(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
 
         @Volatile
-        private var instance: HeadlessExtractorRepository? = null
+        private var instance: SecureExtractionEngine? = null
 
         /** App-scoped singleton: the pool must outlive any single resolve or service. */
-        fun get(context: Context): HeadlessExtractorRepository =
+        fun get(context: Context): SecureExtractionEngine =
             instance ?: synchronized(this) {
-                instance ?: HeadlessExtractorRepository(context.applicationContext).also {
+                instance ?: SecureExtractionEngine(context.applicationContext).also {
                     instance = it
                 }
             }
+
+        /** Quotes/escapes a value for safe interpolation into an injected script. */
+        private fun jsLiteral(value: String): String =
+            "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+
+        /** The full hook for one session, with the bridge name, token and video id baked in. */
+        private fun hookScript(transactionId: String, requestedVideoId: String): String =
+            HOOK_JS
+                .replace("__BRIDGE__", BRIDGE_NAME)
+                .replace("__TRANSACTION__", jsLiteral(transactionId))
+                .replace("__REQUESTED__", jsLiteral(requestedVideoId))
+
+        /** Tiny, idempotent nudge that puts a drifted page back on the requested video. */
+        private fun healScript(requestedVideoId: String): String =
+            "(function(){try{var p=document.getElementById('movie_player');" +
+                "if(p&&p.loadVideoById){p.loadVideoById(" + jsLiteral(requestedVideoId) + ");}" +
+                "}catch(e){}})();"
 
         /**
          * Reads the id of the video the page's own player is currently on. Diagnostics only:
@@ -684,14 +837,20 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
         /**
          * The in-page extraction hook (a real V8 hook, not a scraper).
          *
+         *  * masks the most obvious automation/browser-identity tells, which reduces how
+         *    often the page answers with a bot interstitial instead of a player response,
          *  * wraps `window.fetch` and `XMLHttpRequest` so a `/youtubei/v1/player` response is
          *    parsed the instant it arrives,
          *  * polls the player's own retained response object as a safety net (the initial
          *    response is inlined into the watch page, so this usually hits immediately),
          *  * parses `streamingData.adaptiveFormats` **inside the engine** and pushes only
-         *    audio-only records over the bridge, preferring to stop after the first hit.
+         *    audio-only records over the bridge,
+         *  * reports the video the player is on every tick, so the engine knows whether a
+         *    capture is really the requested song,
+         *  * never publishes a player response that belongs to a *different* video, so the
+         *    app can never be handed another song's audio.
          *
-         * `__BRIDGE__` is replaced with this session's bridge name before injection.
+         * `__BRIDGE__`, `__TRANSACTION__` and `__REQUESTED__` are replaced before injection.
          * Entries that only carry a `signatureCipher` are skipped on purpose: deciphering
          * them needs YouTube's obfuscated JS, and guessing would produce a broken URL.
          */
@@ -699,6 +858,40 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
             (function () {
               var BRIDGE = window["__BRIDGE__"];
               if (!BRIDGE) { return; }
+              var TX = __TRANSACTION__;
+              var REQUESTED = __REQUESTED__;
+
+              if (!window.__suzieePrint) {
+                window.__suzieePrint = 1;
+                try {
+                  Object.defineProperty(navigator, "webdriver", {
+                    get: function () { return false; }, configurable: true
+                  });
+                } catch (e) {}
+                try {
+                  Object.defineProperty(navigator, "hardwareConcurrency", {
+                    get: function () { return 8; }, configurable: true
+                  });
+                } catch (e) {}
+                try {
+                  Object.defineProperty(navigator, "languages", {
+                    get: function () { return ["en-US", "en"]; }, configurable: true
+                  });
+                } catch (e) {}
+                try {
+                  var toDataURL = HTMLCanvasElement.prototype.toDataURL;
+                  HTMLCanvasElement.prototype.toDataURL = function () {
+                    try {
+                      var ctx = this.getContext ? this.getContext("2d") : null;
+                      if (ctx && this.width > 0 && this.height > 0) {
+                        ctx.fillStyle = "rgba(0,0,0,0.01)";
+                        ctx.fillRect(0, 0, 1, 1);
+                      }
+                    } catch (e) {}
+                    return toDataURL.apply(this, arguments);
+                  };
+                } catch (e) {}
+              }
 
               function recordsFrom(streamingData) {
                 var out = [];
@@ -728,15 +921,30 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
                   if (!response) { return false; }
                   var details = response.videoDetails;
                   var videoId = "";
-                  if (details && details.videoId) {
-                    videoId = String(details.videoId);
-                    try { BRIDGE.onVideoId(videoId); } catch (e) {}
-                  }
+                  if (details && details.videoId) { videoId = String(details.videoId); }
+                  if (videoId && REQUESTED && videoId !== REQUESTED) { return false; }
                   var records = recordsFrom(response.streamingData);
                   if (!records.length) { return false; }
-                  BRIDGE.onFormats(videoId, records.join("\n"));
+                  BRIDGE.onFormats(TX, videoId, records.join("\n"));
                   return true;
                 } catch (e) { return false; }
+              }
+
+              function currentVideoId() {
+                try {
+                  var p = document.getElementById("movie_player");
+                  if (p && p.getVideoData) {
+                    var d = p.getVideoData() || {};
+                    return String(d.video_id || "");
+                  }
+                } catch (e) {}
+                return "";
+              }
+
+              function report() {
+                var id = currentVideoId();
+                if (id) { try { BRIDGE.onVideoId(TX, id); } catch (e) {} }
+                return id;
               }
 
               function scan() {
@@ -810,19 +1018,17 @@ class HeadlessExtractorRepository private constructor(private val appContext: Co
 
               if (window.__suzieeTimer) { clearInterval(window.__suzieeTimer); }
               var tries = 0;
-              scan();
               window.__suzieeTimer = setInterval(function () {
                 tries = tries + 1;
-                if (scan() || tries >= 20) {
+                report();
+                scan();
+                if (tries >= 20) {
                   clearInterval(window.__suzieeTimer);
                   window.__suzieeTimer = null;
                 }
               }, 400);
             })();
         """
-
-        /** [HOOK_JS] with this session's bridge name baked in. */
-        private val HOOK_SCRIPT = HOOK_JS.replace("__BRIDGE__", BRIDGE_NAME)
 
         /**
          * Forces the page's player to start without a user gesture and keeps the page

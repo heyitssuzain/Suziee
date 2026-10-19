@@ -3,15 +3,149 @@
 Date: 19 Oct 2026 · Base: `v1.2-build-21` · Scope: smallest safe changes, no feature removals,
 no data loss, no identity/signing change.
 
-Four fix passes are recorded here. **Pass 4 (below) is the current, authoritative one**: it
-replaces the primary extraction source with the pre-warmed headless engine and hardens the
-media surfaces. Pass 3 (also below) is kept for its evidence trail: pass 2 had made official
-songs *stop playing entirely*, and pass 3 removed that regression instead of adding another
-layer of tightening.
+Five fix passes are recorded here. **Pass 5 (below) is the current, authoritative one**: it
+makes it impossible for a *different* recording to be played in place of the requested song
+(transaction tokens + page-drift rejection + a SoundCloud gate that now verifies the
+performer) and adopts the requested class names. Pass 4 (also below) replaced the primary
+extraction source with the pre-warmed headless engine; pass 3 is kept for its evidence trail:
+pass 2 had made official songs *stop playing entirely*, and pass 3 removed that regression
+instead of adding another layer of tightening.
+
+---
+
+# PASS 5 — identity verification: wrong recordings can no longer be played (build 26)
+
+## The report, and what was actually wrong
+
+"Still the official song plays with wrong audio." A wrong recording can only reach the
+speakers through one of two doors, and both were open in pass 4:
+
+1. **The SoundCloud substitute accepted a different performer.** The gate rejected only
+   *conflicts*: a decorated title, a clearly different title, a clearly different length, or a
+   weak title without artist corroboration. An **unlabelled cover** - uploaded under exactly
+   the official title, at a plausible length, by a channel that is not the artist - had **no
+   conflict to detect**, because a title match ≥ 0.75 skipped the artist check entirely
+   (`SoundCloudMatch.isAcceptableSubstitute` step 4). The same door let a *different song that
+   merely shares the title* through. That is "Requesting 'Attention' but getting a
+   cover/unrelated audio", and it fires whenever the extraction engine fails and the fallback
+   takes over.
+2. **The signed capture was not checked against the requested video.** The page's own player
+   is the source of the captured URL, and a watch page can move on by itself (bot/availability
+   interstitial followed by autoplay, region block, a stale document left by the pooled
+   WebView). The URL it then produces is a perfectly valid, `n`-transformed audio stream - for
+   the wrong song. Pass 3 had deliberately made the video-id check log-only, so that stream was
+   used as-is. The user's design prompt names this exactly ("transaction token pattern … if the
+   stream doesn't match the current active transaction token, drop it").
+
+## What changed
+
+### A. The substitute gate must verify the performer — `SoundCloudMatch.kt`
+New rule (step 4 of `isAcceptableSubstitute`): when the request names a **real artist** (not
+`Unknown Artist` / `YouTube Music` / `Various Artists`) and the candidate has a **named
+uploader**, that uploader must corroborate the artist (fuzzy uploader match, or the artist name
+inside the upload title). A named uploader that is not the artist is positive evidence of a
+different performer - cover, re-upload, or same-title different song - and is refused.
+Missing metadata still never rejects: a **blank** uploader carries no evidence, so it falls
+back to the existing rule (a weak title then still needs the artist to appear somewhere).
+
+This is the deliberate trade the directive asks for: for an official request, an **honest
+error** is correct where a different recording used to be played.
+
+### B. A capture must belong to the requested video — `SecureExtractionEngine.kt` + `AudioIdentityPolicy.kt`
+* **Transaction token pattern.** Every extraction session gets a fresh UUID token; the injected
+  hook echoes it on every bridge call and a call bearing any other token is dropped. A pooled
+  WebView's previous document can therefore never feed a callback into the new session.
+* **Page-identity check on the authoritative capture.** The hook reports the video id the
+  page's player is on every tick; the engine keeps it and drops a signed capture when the page
+  is demonstrably on a *different* video. `AudioIdentityPolicy.isForeignCapture` implements
+  this as **reject only on positive evidence** - an unknown/blank/`null` report is *accepted*,
+  because dropping on "unknown" is what previously starved every official song of its stream.
+* **Bounded drift recovery.** On a mismatch the page is asked to reload the requested video
+  (max `MAX_DRIFT_RELOADS = 2`), and the foreign stream keeps being dropped meanwhile - so an
+  unrecoverable page fails honestly instead of playing the wrong song.
+* **The hook itself never publishes a foreign response**: `videoDetails.videoId` is compared
+  against the requested id inside V8 before any `adaptiveFormats` record is sent.
+* **One re-navigation** if nothing at all has been captured by `RENAVIGATE_AT_MS = 4_000L`
+  (the first page load can land on an interstitial; the 8 s deadline is never extended).
+* **Browser-identity masking** (best effort, as requested): `navigator.webdriver = false`,
+  `hardwareConcurrency`, `languages`, and a 1-pixel canvas-noise shim on `toDataURL` - to
+  reduce how often the page answers with a bot interstitial instead of a player response.
+
+### C. Requested architecture names
+`HeadlessExtractorRepository` → **`SecureExtractionEngine`**; `MusicPlaybackService` →
+**`SuzieeMediaService`** (now also logging every `onMediaItemTransition` with
+title/artist/artwork, which is the evidence trail for "notification shows a different track");
+new **`PlaybackCoordinator`** owns the resolution ladder (engine → hedged SoundCloud), the
+winning-source identity and the one-shot failover claims, so `MusicPlayerManager` no longer
+mixes resolution policy with player handling.
+
+**Deviations, stated plainly.** No custom OkHttp connection pool / "traffic spoofing" stack:
+the player keeps Media3's `DefaultHttpDataSource`, which is what actually transports the
+stream, and adding a second HTTP stack would not change which recording is played. The
+notification is still rendered by Media3 from the active `MediaItem` (we log the transitions
+rather than re-rendering by hand, which would fight Media3's own notification manager).
+
+## Automated verification (CI run for commit `e615f77`+ this pass) — test gate enforced
+`SoundCloudStrictMatchTest` grew from 21 to **26** cases (the cover, the same-title different
+song, the official-looking channel, the fan channel, the blank uploader) and
+`AudioIdentityPolicyTest` adds **6** cases (drift reject, unknown-report accept, quoted/`null`
+cleaning). Everything else is unchanged and still green. Exact per-class counts are published
+as `::notice::TESTRESULT …` annotations on the run (readable without GitHub auth).
+
+**Still device-unverified:** audible output, live extraction, real startup latency, the
+notification/lock-screen surfaces and how often the primary engine actually wins on the
+user's phone. All of it is **CODE FIXED BUT DEVICE UNVERIFIED**.
+
+## Log tags for the on-device checks
+`adb logcat -s SecureExtractionEngine PlaybackCoordinator MusicPlayerManager SoundCloudApiClient MainActivity SuzieeMediaService ExtractionService`
+
+Key new lines: `[<tx>] Dropping capture - page is on '<other>' while '<requested>' was
+requested (drift)`, `[<tx>] Page reports '…' … (drift recovery)`, `[<tx>] Nothing captured
+after 4000ms - reloading the watch page once`, `Substitute rejected (conflicts with the
+request): …`, `MediaItem transition (reason=…)': '<title>' by '<artist>' artwork=yes|none`.
+
+## Status per reported issue (pass 5)
+| # | Issue | Status |
+|---|-------|--------|
+| 1 | Official song plays wrong/cover/unrelated audio | Both doors closed: the substitute gate now verifies the performer (26 CI cases incl. an unlabelled cover and a same-title different song), and a captured stream that is not the requested video is dropped (transaction token + page-identity check + V8-side gate). **CODE FIXED (unit-tested in CI) BUT DEVICE UNVERIFIED** |
+| 2 | Never silently substitute a fan-made/alternate recording | A named non-artist uploader is now refused outright for an official request; the app shows the honest "no acceptable matching source" error instead. **CODE VERIFIED (unit tests)** |
+| 3 | 8 s extraction window | Unchanged: `SecureExtractionEngine.SNIFF_TIMEOUT_MS = 8_000L`, a ceiling, not a wait. **CODE VERIFIED** |
+| 4 | Startup latency | Unchanged from pass 4 (warm engine, pool reuse, hedge at 3 s, 2.5 s early-candidate grace), plus the new 4 s single re-navigation which can save a dead first load. **CODE FIXED BUT DEVICE UNVERIFIED** |
+| 5 | Notification + lock-screen controls | Unchanged structurally (one session, one service, channel `suziee_playback`, id 1001, `QueuePlayer` Next/Previous, `onTaskRemoved`) + per-transition metadata logging. **CODE FIXED BUT DEVICE UNVERIFIED** |
+| 6 | Requested class names / architecture | `SecureExtractionEngine`, `SuzieeMediaService`, `PlaybackCoordinator` all exist and are wired; deviations documented above. **CODE VERIFIED** |
+| 7 | Ads / wasted traffic | Unchanged from pass 4. **CODE FIXED BUT DEVICE UNVERIFIED** |
+
+## Changed files (pass 5)
+| File | Change |
+|------|--------|
+| `app/src/main/java/com/example/data/remote/soundcloud/SoundCloudMatch.kt` | step 4: a named uploader that does not corroborate the requested artist is a conflict (cover / re-upload / same-title different song); blank uploader still never rejects |
+| `app/src/main/java/com/example/data/remote/extraction/SecureExtractionEngine.kt` | `HeadlessExtractorRepository` renamed; transaction tokens on the bridge + hook, page-identity check on the signed capture, drift recovery, 4 s re-navigation, V8-side requested-video gate, browser-identity masking |
+| `app/src/main/java/com/example/data/remote/extraction/AudioIdentityPolicy.kt` | **new** - pure "is this capture a different video" policy (reject only on positive evidence) |
+| `app/src/main/java/com/example/playback/PlaybackCoordinator.kt` | **new** - resolution ladder, winning-source identity, one-shot failover claims; `StreamSource` moved here |
+| `app/src/main/java/com/example/playback/MusicPlayerManager.kt` | uses the coordinator; resolution methods moved out; local file / failover / retry rewired |
+| `app/src/main/java/com/example/playback/MusicPlaybackService.kt` → `SuzieeMediaService.kt` | renamed; `onMediaItemTransition` metadata logging added |
+| `app/src/main/java/com/example/playback/ExtractionService.kt` | uses `SecureExtractionEngine` |
+| `app/src/main/AndroidManifest.xml` | service renamed to `.playback.SuzieeMediaService` |
+| `app/src/main/java/com/example/data/remote/innertube/InnerTubeApiClient.kt`, `.../extraction/AudioFormatSelector.kt` | comment references updated |
+| `app/src/test/java/com/example/SoundCloudStrictMatchTest.kt` | 21 → 26 cases (the cover, the same-title different song, corroborating channels, blank uploader) |
+| `app/src/test/java/com/example/data/remote/extraction/AudioIdentityPolicyTest.kt` | **new** - 6 cases for the drift policy |
+| `progress.md` | this file |
+
+Not touched: Room/DB, downloads, playlists, favourites, history, lyrics, voice commands,
+trending rails, Compose UI/onboarding, theme, app id/version/signing, CI workflow, the search
+backend. **Downloads deliberately keep the non-strict SoundCloud path** (a strict download of
+a mainstream song would usually fail, because label uploads are 30 s previews); the wrong-audio
+report is about playback, and changing download availability is a feature decision, not a fix.
 
 ---
 
 # PASS 4 — pre-warmed headless extraction engine + strict media session (build 25)
+
+> Historical: the class/file names below were renamed in **pass 5** —
+> `HeadlessExtractorRepository.kt` → `SecureExtractionEngine.kt` (log tag
+> `HeadlessExtractor` → `SecureExtractionEngine`) and `MusicPlaybackService.kt` →
+> `SuzieeMediaService.kt` (tag `MusicPlaybackService` → `SuzieeMediaService`). Behaviour is as
+> described here plus the pass-5 identity checks.
 
 ## What was built (requested design, with four deliberate deviations)
 

@@ -7,12 +7,12 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
-import com.example.data.remote.extraction.HeadlessExtractorRepository
+import com.example.data.remote.extraction.SecureExtractionEngine
 
 /**
  * Lifecycle host for the headless extraction engine.
  *
- * The engine's WebView pool lives in [HeadlessExtractorRepository] (an app-scoped
+ * The engine's WebView pool lives in [SecureExtractionEngine] (an app-scoped
  * singleton) and works whether or not this service is running. This service exists purely
  * as an **optional optimisation**: starting it while the app is in the foreground asks for
  * a warm engine, so the first song the user taps does not pay for Chromium instantiation
@@ -24,7 +24,7 @@ import com.example.data.remote.extraction.HeadlessExtractorRepository
  */
 class ExtractionService : Service() {
 
-    private lateinit var repository: HeadlessExtractorRepository
+    private lateinit var repository: SecureExtractionEngine
     private val handler = Handler(Looper.getMainLooper())
 
     private val idleStop = Runnable {
@@ -38,7 +38,7 @@ class ExtractionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        repository = HeadlessExtractorRepository.get(this)
+        repository = SecureExtractionEngine.get(this)
         repository.warmUp()
         rescheduleIdleStop()
     }

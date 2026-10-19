@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
  * UNPLAYABLE or HTTP 400/404, so calling it only wasted time and bandwidth.
  *
  * Playable YouTube audio is obtained one layer up, in
- * `com.example.data.remote.extraction.HeadlessExtractorRepository`, which drives a real browser session
+ * `com.example.data.remote.extraction.SecureExtractionEngine`, which drives a real browser session
  * (headless WebView) - the only thing that can satisfy YouTube's PoToken / `n`-param
  * challenge. SoundCloud is the fallback source.
  */
