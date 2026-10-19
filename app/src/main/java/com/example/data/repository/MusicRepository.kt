@@ -9,21 +9,16 @@ import com.example.data.local.entities.TrackEntity
 import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.remote.lyrics.LrclibApiClient
 import com.example.data.remote.lyrics.LyricsResult
-import com.example.data.remote.soundcloud.SoundCloudApiClient
 import com.example.domain.model.Playlist
-import com.example.domain.model.StreamInfo
 import com.example.domain.model.Track
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 class MusicRepository(
     private val database: SuzieeDatabase,
     private val innerTubeApi: InnerTubeApiClient = InnerTubeApiClient(),
-    private val soundCloudApi: SoundCloudApiClient = SoundCloudApiClient(),
     private val lrclibApi: LrclibApiClient = LrclibApiClient()
 ) {
     private val trackDao = database.trackDao()
@@ -47,46 +42,9 @@ class MusicRepository(
         return innerTubeApi.getSuggestions(query)
     }
 
-    /**
-     * Resolves a directly playable audio URL for [track] from the SoundCloud source.
-     *
-     * This used to try the YouTube InnerTube player API and then Piped/Invidious
-     * mirrors. All of those were removed: every one of them answers LOGIN_REQUIRED,
-     * UNPLAYABLE or HTTP 400/404 for anonymous requests, so they only burned time and
-     * bandwidth. YouTube tracks are still played - that resolution happens one layer up
-     * in `MusicPlayerManager`, which first drives the headless-WebView sniffer (a real
-     * YouTube browser session) and only calls down to this SoundCloud path when the
-     * sniffer fails.
-     *
-     * @param allowHls when false only a single progressive file is accepted. The
-     * downloader sets this because an HLS playlist cannot be saved as one audio file.
-     * @param strict when true the SoundCloud substitute must be *verified* as the same
-     * recording (title + artist + duration) - used for playback of a requested official
-     * recording so a fan-made/slowed/cover version is never played instead.
-     */
-    suspend fun resolveStreamUrl(
-        track: Track,
-        allowHls: Boolean = true,
-        strict: Boolean = false
-    ): Result<StreamInfo> {
-        // If downloaded locally, use the local file path!
-        val localPath = track.localFilePath
-        if (track.isDownloaded && !localPath.isNullOrBlank()) {
-            return Result.success(StreamInfo(localPath))
-        }
-
-        return withTimeoutOrNull(RESOLVE_TIMEOUT_MS) {
-            val soundCloud = soundCloudApi.resolve(track, allowHls = allowHls, strict = strict)
-            if (soundCloud != null && soundCloud.url.isNotBlank()) {
-                runCatching {
-                    trackDao.insertTrack(TrackEntity.fromDomain(track.copy(streamUrl = soundCloud.url)))
-                }
-                return@withTimeoutOrNull Result.success(soundCloud)
-            }
-
-            Result.failure(Exception("Unable to resolve playable audio stream for ${track.title}"))
-        } ?: Result.failure(Exception("Stream resolution timed out. Please try again."))
-    }
+    // Online stream resolution lives in OnlineStreamResolver (yt-dlp primary + headless
+    // WebView fallback), shared by playback and downloads. Keeping it out of the
+    // repository avoids a second, divergent provider path here.
 
     suspend fun getLyrics(track: Track): Result<LyricsResult> {
         // Check if cached in DB
@@ -186,10 +144,5 @@ class MusicRepository(
     suspend fun removeDownloadedTrack(trackId: String) {
         trackDao.updateDownloadStatus(trackId, isDownloaded = false, localPath = null)
         downloadDao.deleteDownload(trackId)
-    }
-
-    companion object {
-        /** Upper bound for a full stream-resolution attempt (primary + fallbacks). */
-        private const val RESOLVE_TIMEOUT_MS = 30_000L
     }
 }

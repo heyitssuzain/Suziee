@@ -20,6 +20,15 @@ android {
     versionName = "1.2"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // youtubedl-android ships a complete Python runtime plus yt-dlp for every ABI.
+    // All four ABIs would add roughly 60 MB of native payload to the APK. arm64-v8a
+    // alone adds about 18 MB (the agreed ~20 MB budget) and covers every current
+    // production phone. Add "armeabi-v7a" here only if a 32-bit device must be
+    // supported; that costs another ~14 MB.
+    ndk {
+      abiFilters.add("arm64-v8a")
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -64,6 +73,14 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  packaging {
+    jniLibs {
+      // youtubedl-android reads libpython.zip.so from the extracted native-library
+      // directory and unzips the Python runtime from it. Without legacy packaging the
+      // libraries stay inside the APK and that file does not exist on disk.
+      useLegacyPackaging = true
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -112,6 +129,9 @@ dependencies {
   implementation(libs.androidx.media3.session)
   implementation(libs.androidx.media3.ui)
   implementation(libs.converter.moshi)
+  // Primary online-audio engine: yt-dlp (with a bundled Python runtime and QuickJS).
+  // Maintained coordinates on Maven Central; GPL-3.0 (see NOTICE.md).
+  implementation(libs.youtubedl.library)
   implementation(libs.firebase.ai)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)

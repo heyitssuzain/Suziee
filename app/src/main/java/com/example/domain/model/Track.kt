@@ -27,12 +27,12 @@ data class Track(
 /**
  * A resolved, directly playable audio stream.
  *
- * @param url The direct media URL (googlevideo / SoundCloud / local file).
- * @param mimeType Optional container mime type (e.g. "audio/mp4", or
+ * @param url The direct media URL (googlevideo / local file).
+ * @param mimeType Optional container mime type (e.g. "audio/webm", "audio/mp4", or
  * "application/x-mpegURL" for an HLS playlist), used to help the player parse
  * extension-less stream URLs reliably.
  * @param headers Per-stream HTTP headers that the CDN requires (YouTube needs a
- * Referer + the browser session Cookie, SoundCloud needs a Referer). Merged on top
+ * Referer + the browser session Cookie or the User-Agent yt-dlp used). Merged on top
  * of the player's default media headers.
  */
 data class StreamInfo(

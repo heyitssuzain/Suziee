@@ -10,8 +10,8 @@ import org.junit.Test
  *
  * The rule that matters: a captured stream may only be dropped on **positive evidence** that
  * the page is on a different video. Reporting "unknown" and dropping the capture anyway is
- * exactly what previously starved every official song of its stream (it fell through to the
- * SoundCloud substitute), so the "no evidence" cases are asserted explicitly.
+ * exactly what previously starved every official song of its stream, so the "no evidence"
+ * cases are asserted explicitly.
  */
 class AudioIdentityPolicyTest {
 

@@ -4,9 +4,9 @@
 
     <!--
         Network permissions required by the playback engine:
-          * INTERNET / ACCESS_NETWORK_STATE - the headless WebView sniffer, the SoundCloud
-            API and ExoPlayer's media fetches.
-        `hardwareAccelerated` is enabled below so the background WebView (primary source)
+          * INTERNET / ACCESS_NETWORK_STATE - the yt-dlp engine, the headless WebView
+            fallback and ExoPlayer's media fetches.
+        `hardwareAccelerated` is enabled below so the background WebView (fallback source)
         can render and run YouTube's player JavaScript.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -21,6 +21,7 @@
         android:name=".SuzieeApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:extractNativeLibs="true"
         android:fullBackupContent="@xml/backup_rules"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
@@ -58,7 +59,7 @@
         </service>
 
         <!--
-            Optional pre-warm helper for the headless extraction engine (see ExtractionService).
+            Optional pre-warm helper for the headless WebView fallback (see ExtractionService).
             It is never a foreground service and stops itself when idle.
         -->
         <service

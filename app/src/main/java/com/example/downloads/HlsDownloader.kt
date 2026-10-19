@@ -14,10 +14,9 @@ import java.io.IOException
  * offline playback path works unchanged.
  *
  * ## Why this exists
- * SoundCloud only publishes full-length tracks as HLS (`progressive` transcodings exist
- * solely on the 30 second "SNIP" previews). An m3u8 is just a text index of segment URLs,
- * so saving it verbatim would produce an unplayable text file - which is why downloads
- * used to always fail. Instead we fetch the real playlist and concatenate its pieces:
+ * An m3u8 is just a text index of segment URLs, so saving it verbatim would produce an
+ * unplayable text file. When a resolver returns an HLS manifest (some streams are only
+ * offered that way), this fetches the real playlist and concatenates its pieces:
  *
  *   fMP4 (`#EXT-X-MAP` + `styp/moof/mdat` segments) -> init segment + all segments in
  *   order == a valid fragmented MP4, saved as `.m4a`.
@@ -140,7 +139,7 @@ class HlsDownloader(
         val builder = Request.Builder()
             .url(url)
             .header("User-Agent", headers["User-Agent"] ?: defaultUserAgent)
-            .header("Referer", headers["Referer"] ?: "https://soundcloud.com/")
+            .header("Referer", headers["Referer"] ?: "https://www.youtube.com/")
         headers.forEach { (name, value) ->
             if (!name.equals("User-Agent", true) && !name.equals("Referer", true)) {
                 builder.header(name, value)

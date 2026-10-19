@@ -3,6 +3,7 @@ package com.example
 import android.app.Application
 import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
+import com.example.data.remote.ytdlp.SuzieeAudioExtractor
 import com.example.downloads.DownloadManager
 import com.example.playback.MusicPlayerManager
 
@@ -23,7 +24,7 @@ class SuzieeApplication : Application() {
      * and so every track row can observe live progress from the same source.
      */
     val downloadManager: DownloadManager by lazy {
-        DownloadManager(this, database, playerManager.repository)
+        DownloadManager(this, database, playerManager.repository, playerManager.streamResolver)
     }
 
     override fun onCreate() {
@@ -32,6 +33,10 @@ class SuzieeApplication : Application() {
         database = SuzieeDatabase.getInstance(this)
         preferences = SuzieePreferences(this)
         playerManager = MusicPlayerManager(this, database, preferences)
+        // Unpack the bundled Python runtime / yt-dlp binary off the main thread now, so
+        // the first song does not pay for it. Safe if it fails: the WebView fallback
+        // still resolves playback.
+        SuzieeAudioExtractor.warmUp(this)
     }
 
     companion object {

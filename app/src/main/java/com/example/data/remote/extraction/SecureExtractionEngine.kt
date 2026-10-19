@@ -132,7 +132,7 @@ internal class ExtractionBridge(
  * [EARLY_CANDIDATE_GRACE_MS] for path 1, because path 1 is the one that is guaranteed to
  * be un-throttled; only if the signed capture has not arrived by then is the early
  * candidate used, which shortens the failure path considerably. If ExoPlayer still cannot
- * play it, the normal SoundCloud failover in `MusicPlayerManager` takes over.
+ * play it, `MusicPlayerManager` re-resolves the track once through the online ladder.
  *
  * ## Identifying the transaction (no wrong-song playback)
  *  * every session gets a fresh transaction token, and bridge callbacks that echo any other
@@ -233,7 +233,7 @@ class SecureExtractionEngine private constructor(private val appContext: Context
                 Log.w(
                     TAG,
                     "Primary extractor produced no stream for $videoId after ${elapsed}ms " +
-                        "(window ${timeoutMs}ms) - SoundCloud fallback allowed"
+                        "(window ${timeoutMs}ms) - online ladder continues"
                 )
             } else {
                 val confidence =
@@ -744,9 +744,8 @@ class SecureExtractionEngine private constructor(private val appContext: Context
         private const val TAG = "SecureExtractionEngine"
 
         /**
-         * How long the engine gets to reach the first audio request before the SoundCloud
-         * fallback is allowed to proceed. This is a ceiling, not a wait: the flow completes
-         * the moment a request is captured.
+         * How long this fallback engine gets to reach the first audio request. This is a
+         * ceiling, not a wait: the flow completes the moment a request is captured.
          */
         const val SNIFF_TIMEOUT_MS = 8_000L
 
@@ -757,8 +756,8 @@ class SecureExtractionEngine private constructor(private val appContext: Context
          * window only decides how long we wait for it before falling back to the
          * player-response URL. 2.5s is chosen against the two other timings: a healthy signed
          * capture lands inside ~2s (so it is essentially never preempted), while a dead end
-         * is cut from the full [SNIFF_TIMEOUT_MS] to well under the 3s hedge that
-         * `MusicPlayerManager` uses to start the SoundCloud fallback in parallel.
+         * is cut from the full [SNIFF_TIMEOUT_MS] to well under the hedge that
+         * `OnlineStreamResolver` uses before starting this engine in parallel.
          */
         const val EARLY_CANDIDATE_GRACE_MS = 2_500L
 

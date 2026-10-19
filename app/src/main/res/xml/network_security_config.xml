@@ -1,12 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Network configuration for the dual-source playback engine.
+    Network configuration for the online playback engine.
 
-    Media traffic comes from three kinds of endpoints, all of which are HTTPS but may
+    Media traffic comes from two kinds of endpoints, all of which are HTTPS but may
     hand out HTTP media segment URLs or redirects:
-      * googlevideo.com          - YouTube adaptive audio (sniffed by the headless WebView)
-      * *.soundcloud.cloud       - SoundCloud progressive / HLS streams
-      * api-v2.soundcloud.com    - SoundCloud search + transcoding resolution
+      * googlevideo.com          - YouTube audio, resolved by yt-dlp or the WebView fallback
+      * youtube.com / ytimg.com  - yt-dlp metadata and the headless browser session
 
     Cleartext is permitted so a redirect to an http:// CDN host cannot silently break
     playback. System trust anchors are used for TLS.

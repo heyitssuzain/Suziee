@@ -10,13 +10,13 @@ import android.util.Log
 import com.example.data.remote.extraction.SecureExtractionEngine
 
 /**
- * Lifecycle host for the headless extraction engine.
+ * Lifecycle host for the headless WebView fallback.
  *
  * The engine's WebView pool lives in [SecureExtractionEngine] (an app-scoped
  * singleton) and works whether or not this service is running. This service exists purely
  * as an **optional optimisation**: starting it while the app is in the foreground asks for
- * a warm engine, so the first song the user taps does not pay for Chromium instantiation
- * on the critical path.
+ * a warm fallback engine, so a yt-dlp failure can hand over to the WebView without paying
+ * for Chromium instantiation on the critical path.
  *
  * It is deliberately *not* a foreground service and never posts a notification: it does no
  * user-visible work, holds no wake lock, and stops itself as soon as no extraction is in
@@ -69,9 +69,10 @@ class ExtractionService : Service() {
         private const val IDLE_STOP_MS = 90_000L
 
         /**
-         * Asks for a warm extraction engine. Idempotent and completely safe to call often:
-         * a failure to start (e.g. a background-start restriction on some OEM build) is
-         * logged and otherwise ignored - extraction still works, it just starts cold.
+         * Asks for a warm WebView fallback engine. Idempotent and completely safe to call
+         * often: a failure to start (e.g. a background-start restriction on some OEM
+         * build) is logged and otherwise ignored - extraction still works, it just starts
+         * cold.
          */
         fun ensureStarted(context: Context) {
             try {

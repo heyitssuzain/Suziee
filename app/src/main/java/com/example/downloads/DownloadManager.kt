@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.data.local.SuzieeDatabase
 import com.example.data.local.entities.DownloadEntity
 import com.example.data.remote.innertube.InnerTubeApiClient
+import com.example.data.remote.streaming.OnlineStreamResolver
 import com.example.data.repository.MusicRepository
 import com.example.domain.model.StreamInfo
 import com.example.domain.model.Track
@@ -25,15 +26,15 @@ import java.util.concurrent.TimeUnit
 /**
  * Saves a track to app-private storage so it can be played with no network at all.
  *
- * Two routes, tried in order:
+ * Resolution goes through the same [OnlineStreamResolver] that playback uses (yt-dlp
+ * first, headless WebView fallback), so the file is the requested recording, not a
+ * substitute. Two save routes are tried:
  *
- *  1. **Progressive** - a plain MP3/MP4 the CDN serves as one file. Cheapest, so it is
- *     always attempted first.
- *  2. **HLS stitch** - SoundCloud publishes full-length tracks *only* as HLS, so this is
- *     the route that actually runs for most tracks. `HlsDownloader` fetches the playlist
- *     and writes the init segment plus every media segment into a single fragmented MP4,
- *     giving a genuine offline file (previously this path did not exist, which is why
- *     downloads always failed).
+ *  1. **Progressive** - a plain WebM/MP4 audio file the CDN serves as one file. This is
+ *     what yt-dlp format 251/140 produces, so it is the normal path.
+ *  2. **HLS stitch** - if a resolver hands back an m3u8, `HlsDownloader` fetches the
+ *     playlist and writes the init segment plus every media segment into a single file,
+ *     giving a genuine offline file instead of saving an unplayable text playlist.
  *
  * The finished file is registered on the track (`localFilePath`) and the player detects
  * that and plays straight from disk - no `m3u8` text file is ever handed to ExoPlayer.
@@ -41,7 +42,8 @@ import java.util.concurrent.TimeUnit
 class DownloadManager(
     private val context: Context,
     private val database: SuzieeDatabase,
-    private val repository: MusicRepository
+    private val repository: MusicRepository,
+    private val streamResolver: OnlineStreamResolver
 ) {
     private val downloadDao = database.downloadDao()
     private val activeJobs = ConcurrentHashMap<String, Job>()
@@ -120,12 +122,17 @@ class DownloadManager(
     }
 
     /**
-     * Finds something we can save as one file. A single resolve is enough: the SoundCloud
-     * resolver already prefers a progressive file and only falls back to HLS, which is
-     * exactly the choice between the two download routes below.
+     * Finds something we can save as one file. The shared ladder prefers yt-dlp (one
+     * progressive audio stream) and only uses the WebView fallback when yt-dlp cannot
+     * resolve; both are the requested video.
      */
-    private suspend fun resolveForDownload(track: Track): StreamInfo? =
-        repository.resolveStreamUrl(track, allowHls = true).getOrNull()
+    private suspend fun resolveForDownload(track: Track): StreamInfo? {
+        val resolved = streamResolver.resolve(track.id)
+        if (resolved != null) {
+            Log.i(TAG, "Download source for ${track.id}: ${resolved.source}")
+        }
+        return resolved?.info
+    }
 
     /**
      * Routes to the progressive or HLS path and retries the *whole* download once on a
@@ -192,17 +199,20 @@ class DownloadManager(
         if (!musicDir.exists()) musicDir.mkdirs()
 
         val extension = when {
+            stream.mimeType?.contains("webm", ignoreCase = true) == true -> "webm"
+            stream.mimeType?.contains("ogg", ignoreCase = true) == true -> "ogg"
             stream.mimeType?.contains("mpeg", ignoreCase = true) == true -> "mp3"
             stream.mimeType?.contains("mp4", ignoreCase = true) == true -> "m4a"
+            stream.url.contains(".webm", ignoreCase = true) -> "webm"
             stream.url.contains(".mp3", ignoreCase = true) -> "mp3"
             else -> "m4a"
         }
         val destinationFile = File(musicDir, "$baseName.$extension")
 
-        // Stream-specific headers win over the baseline ones.
+        // yt-dlp returns the headers the CDN expects (User-Agent / Referer). Keep the
+        // generic media UA as a baseline; a per-stream header overrides it.
         val requestHeaders = mutableMapOf(
-            "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
-            "Referer" to "https://soundcloud.com/"
+            "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT
         )
         requestHeaders.putAll(stream.headers)
 
