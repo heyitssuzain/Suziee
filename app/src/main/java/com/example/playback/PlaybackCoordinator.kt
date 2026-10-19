@@ -12,16 +12,13 @@ import kotlinx.coroutines.CancellationException
  * Turns "the user asked for this track" into "a stream is loaded, and here is where it
  * came from".
  *
- * The actual source ladder lives in [OnlineStreamResolver] (yt-dlp first, headless
- * WebView fallback). This class owns the decisions that must survive between resolutions:
+ * The actual source lives in [OnlineStreamResolver] (the native YouTube player-API
+ * client). This class owns the decisions that must survive between resolutions:
  *
  *  * the **identity of the winning source** ([currentSource]), used to decide whether a
  *    playback error is worth a second attempt,
  *  * the **one-shot failover guard** ([claimFailover]), so a track whose stream dies
- *    mid-playback is re-resolved exactly once instead of looping,
- *  * the **partial-resolve hedge**: on a normal play yt-dlp gets
- *    [OnlineStreamResolver.HEDGE_DELAY_MS] before the WebView fallback starts, while a
- *    failover races both engines immediately.
+ *    mid-playback is re-resolved exactly once instead of looping.
  *
  * It never touches ExoPlayer, the queue, or the UI.
  */
@@ -57,24 +54,18 @@ internal class PlaybackCoordinator(
     }
 
     /**
-     * Resolves [track] through the online ladder.
+     * Resolves [track] through the online provider.
      *
-     * @param usePrimary true for a new song (yt-dlp gets the hedge delay first); false
-     *   for a failover, where both engines start at once because the previous stream is
-     *   already dead.
-     * @return the stream, or null when neither engine could produce one. The caller shows
-     *   an honest error in that case.
+     * @return the stream, or null when YouTube could not provide it. The caller shows an
+     *   honest error in that case; no substitute recording is played.
      */
-    suspend fun resolve(track: Track, usePrimary: Boolean): StreamInfo? {
+    suspend fun resolve(track: Track): StreamInfo? {
         val resolved: ResolvedStream? = try {
-            resolver.resolve(
-                videoId = track.id,
-                hedgeDelayMs = if (usePrimary) OnlineStreamResolver.HEDGE_DELAY_MS else 0L
-            )
+            resolver.resolve(track.id)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Resolution ladder failed for ${track.id}: ${e.message}")
+            Log.w(TAG, "Resolution failed for ${track.id}: ${e.message}")
             null
         }
 

@@ -26,12 +26,11 @@ import java.util.concurrent.TimeUnit
 /**
  * Saves a track to app-private storage so it can be played with no network at all.
  *
- * Resolution goes through the same [OnlineStreamResolver] that playback uses (yt-dlp
- * first, headless WebView fallback), so the file is the requested recording, not a
- * substitute. Two save routes are tried:
+ * Resolution goes through the same [OnlineStreamResolver] that playback uses, so the file
+ * is the requested recording, not a substitute. Two save routes are tried:
  *
  *  1. **Progressive** - a plain WebM/MP4 audio file the CDN serves as one file. This is
- *     what yt-dlp format 251/140 produces, so it is the normal path.
+ *     what the player API's Opus/AAC formats produce, so it is the normal path.
  *  2. **HLS stitch** - if a resolver hands back an m3u8, `HlsDownloader` fetches the
  *     playlist and writes the init segment plus every media segment into a single file,
  *     giving a genuine offline file instead of saving an unplayable text playlist.
@@ -122,9 +121,8 @@ class DownloadManager(
     }
 
     /**
-     * Finds something we can save as one file. The shared ladder prefers yt-dlp (one
-     * progressive audio stream) and only uses the WebView fallback when yt-dlp cannot
-     * resolve; both are the requested video.
+     * Finds something we can save as one file. The shared resolver returns the requested
+     * video's audio-only stream; playback and downloads use the same provider.
      */
     private suspend fun resolveForDownload(track: Track): StreamInfo? {
         val resolved = streamResolver.resolve(track.id)
@@ -209,8 +207,9 @@ class DownloadManager(
         }
         val destinationFile = File(musicDir, "$baseName.$extension")
 
-        // yt-dlp returns the headers the CDN expects (User-Agent / Referer). Keep the
-        // generic media UA as a baseline; a per-stream header overrides it.
+        // The resolver returns the headers the CDN expects (Android-VR User-Agent /
+        // Referer). Keep the generic media UA as a baseline; a per-stream header overrides
+        // it.
         val requestHeaders = mutableMapOf(
             "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT
         )

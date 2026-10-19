@@ -72,16 +72,16 @@ class MusicPlayerManager(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     /**
-     * The online source ladder (primary yt-dlp, fallback headless WebView).
+     * The online source: the native YouTube player-API client.
      *
      * Shared with [com.example.downloads.DownloadManager] through the application, so
-     * playback and offline saving resolve through exactly the same engines.
+     * playback and offline saving resolve through exactly the same provider.
      */
     val streamResolver = OnlineStreamResolver(context)
 
     /**
-     * The resolution ladder plus the one-shot failover guard. It never touches
-     * ExoPlayer - the player handoff stays here.
+     * The resolver plus the one-shot failover guard. It never touches ExoPlayer - the
+     * player handoff stays here.
      */
     private val coordinator = PlaybackCoordinator(streamResolver)
 
@@ -90,8 +90,8 @@ class MusicPlayerManager(
      *
      * Media CDNs are picky: googlevideo answers 403 without a matching User-Agent and a
      * YouTube Referer. These are the baseline applied to every stream; a resolved
-     * [StreamInfo] can add or override entries (e.g. the User-Agent/headers yt-dlp
-     * captured, or the browser session Cookie from the WebView fallback).
+     * [StreamInfo] can add or override entries (the Android-VR User-Agent used to obtain
+     * the URL).
      */
     private val baseMediaHeaders = mapOf(
         "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
@@ -271,7 +271,7 @@ class MusicPlayerManager(
             it.copy(
                 isLoading = false,
                 isPlaying = false,
-                errorMessage = "Couldn't play this track. Check your connection and tap retry."
+                errorMessage = "Couldn't play this track. Tap retry."
             )
         }
         Log.e(TAG, "Playback failed: ${error?.localizedMessage}")
@@ -282,7 +282,7 @@ class MusicPlayerManager(
      * No substitute recording is ever played, so this is a real failure, not a mismatch.
      */
     private fun unplayableMessage(): String =
-        "Couldn't play this track. Check your connection and tap retry."
+        "Couldn't play this track. Tap retry."
 
     /**
      * Makes sure the media session service is running so the notification and lock
@@ -301,16 +301,6 @@ class MusicPlayerManager(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start SuzieeMediaService: ${e.message}", e)
         }
-    }
-
-    /**
-     * Asks for a warm WebView fallback engine (see [ExtractionService]).
-     *
-     * Purely an optimisation: if it is refused (some OEM background-start restrictions) the
-     * engine simply starts cold on the first fallback, and extraction still runs.
-     */
-    private fun ensureExtractorWarm() {
-        ExtractionService.ensureStarted(context)
     }
 
     fun playTrack(track: Track, newQueue: List<Track> = listOf(track)) {
@@ -342,24 +332,20 @@ class MusicPlayerManager(
     }
 
     /**
-     * Resolves [track] and starts playback, using the block-resistant dual-engine
-     * architecture:
+     * Resolves [track] and starts playback:
      *
      *  1. **Local file** - if the track has been downloaded, just play it.
-     *  2. **PRIMARY - yt-dlp**: resolves the requested video id to one progressive
-     *     audio-only stream (Opus/AAC), including YouTube's signature and `n` handling.
-     *  3. **FALLBACK - headless WebView**: starts automatically if yt-dlp has not produced
-     *     a stream after [OnlineStreamResolver.HEDGE_DELAY_MS], runs in parallel, and the
-     *     first usable stream wins. Both engines resolve the same video id, so the audio
-     *     always belongs to the requested recording.
+     *  2. **Online** - the native YouTube player-API client resolves the requested video
+     *     id to one audio-only stream (Opus/AAC). There is no Python/yt-dlp and no WebView
+     *     on this path.
      *
      * The custom native UI is untouched by all of this: it simply observes
      * [PlaybackState.isLoading], which stays true from the moment a song is tapped until
      * ExoPlayer reports STATE_READY/STATE_BUFFERING is over.
      */
     private fun resolveAndStartPlayback(track: Track) {
-        // A new selection always wins: drop whatever the previous track was doing
-        // (including a WebView that may still be extracting) and reset the failover guard.
+        // A new selection always wins: drop whatever the previous track was doing and
+        // reset the failover guard.
         resolveJob?.cancel()
         coordinator.resetForNewTrack()
 
@@ -372,9 +358,6 @@ class MusicPlayerManager(
                 // playback starts, so the notification/lock-screen surfaces cannot miss the
                 // first update. Idempotent (see ensurePlaybackServiceStarted).
                 ensurePlaybackServiceStarted()
-                // Same idea for the fallback: ask for a warm WebView engine while this
-                // resolve is starting, so a follow-up track finds it already up.
-                ensureExtractorWarm()
 
                 // Record to history off the critical path: a DB write must never delay
                 // resolution or playback. Failures are logged, nothing more.
@@ -396,10 +379,13 @@ class MusicPlayerManager(
                     return@launch
                 }
 
-                // 2. + 3. Remote: yt-dlp first, headless WebView fallback in parallel.
-                val streamInfo = coordinator.resolve(track, usePrimary = true)
+                // 2. Remote: the native YouTube player API.
+                val streamInfo = coordinator.resolve(track)
                 if (streamInfo == null) {
-                    Log.e(TAG, "Both engines failed for ${track.title}")
+                    Log.e(
+                        TAG,
+                        "No stream for '${track.title}' (${streamResolver.lastFailure() ?: "unknown"})"
+                    )
                     _playbackState.update {
                         it.copy(
                             isLoading = false,
@@ -427,8 +413,8 @@ class MusicPlayerManager(
     }
 
     /**
-     * Re-resolves the current track through the online ladder. Called when a stream dies
-     * mid-playback (expired signature / dropped CDN connection).
+     * Re-resolves the current track. Called when a stream dies mid-playback (expired
+     * signature / dropped CDN connection).
      *
      * @param resumePositionMs playback continues from here so the user does not hear
      * the song restart from the beginning after a mid-track failure.
@@ -439,9 +425,7 @@ class MusicPlayerManager(
             try {
                 _playbackState.update { it.copy(isLoading = true, errorMessage = null) }
 
-                // Both engines start immediately: the previous stream is already dead, so
-                // there is nothing to wait for.
-                val streamInfo = coordinator.resolve(track, usePrimary = false)
+                val streamInfo = coordinator.resolve(track)
                 if (streamInfo == null) {
                     _playbackState.update {
                         it.copy(
@@ -471,7 +455,7 @@ class MusicPlayerManager(
 
     /**
      * Hands a resolved stream to ExoPlayer natively (background audio, MediaSession
-     * notification, Bluetooth controls - the WebView is fully out of the picture here).
+     * notification, Bluetooth controls - no browser engine is involved).
      *
      * @param startPositionMs optional position to resume from (failover path).
      */

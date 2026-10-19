@@ -47,7 +47,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.Track
 import com.example.downloads.DownloadManager
-import com.example.playback.ExtractionService
 import com.example.playback.MusicPlayerManager
 import com.example.ui.components.AddToPlaylistDialog
 import com.example.ui.components.MiniPlayerBar
@@ -123,10 +122,6 @@ class MainActivity : ComponentActivity() {
         // the media notification / lock-screen controls. This runs once the activity is
         // actually started, and the previous failure path (a swallowed exception) is logged.
         requestNotificationPermissionIfNeeded()
-        // Pre-warm the headless extraction engine while the user is browsing, so tapping a
-        // song does not pay for Chromium instantiation on the critical path. Optional: the
-        // extractor works (cold) even if this service cannot start.
-        ExtractionService.ensureStarted(this)
     }
 
     private fun requestNotificationPermissionIfNeeded() {

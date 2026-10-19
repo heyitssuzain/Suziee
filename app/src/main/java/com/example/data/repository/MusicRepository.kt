@@ -42,9 +42,9 @@ class MusicRepository(
         return innerTubeApi.getSuggestions(query)
     }
 
-    // Online stream resolution lives in OnlineStreamResolver (yt-dlp primary + headless
-    // WebView fallback), shared by playback and downloads. Keeping it out of the
-    // repository avoids a second, divergent provider path here.
+    // Online stream resolution lives in OnlineStreamResolver (the native YouTube player
+    // API), shared by playback and downloads. Keeping it out of the repository avoids a
+    // second, divergent provider path here.
 
     suspend fun getLyrics(track: Track): Result<LyricsResult> {
         // Check if cached in DB

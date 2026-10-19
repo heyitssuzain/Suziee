@@ -32,7 +32,7 @@ data class Track(
  * "application/x-mpegURL" for an HLS playlist), used to help the player parse
  * extension-less stream URLs reliably.
  * @param headers Per-stream HTTP headers that the CDN requires (YouTube needs a
- * Referer + the browser session Cookie or the User-Agent yt-dlp used). Merged on top
+ * Referer and the Android-VR User-Agent used to obtain the URL). Merged on top
  * of the player's default media headers.
  */
 data class StreamInfo(

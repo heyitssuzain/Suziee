@@ -3,7 +3,6 @@ package com.example
 import android.app.Application
 import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
-import com.example.data.remote.ytdlp.SuzieeAudioExtractor
 import com.example.downloads.DownloadManager
 import com.example.playback.MusicPlayerManager
 
@@ -33,10 +32,10 @@ class SuzieeApplication : Application() {
         database = SuzieeDatabase.getInstance(this)
         preferences = SuzieePreferences(this)
         playerManager = MusicPlayerManager(this, database, preferences)
-        // Unpack the bundled Python runtime / yt-dlp binary off the main thread now, so
-        // the first song does not pay for it. Safe if it fails: the WebView fallback
-        // still resolves playback.
-        SuzieeAudioExtractor.warmUp(this)
+        // Fetch the YouTube visitor session in the background now, so the first song is
+        // one player-API POST away instead of two network round trips. Safe if it fails:
+        // the resolver fetches a session lazily on the first play.
+        playerManager.streamResolver.warmUp()
     }
 
     companion object {

@@ -3,11 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-        Network permissions required by the playback engine:
-          * INTERNET / ACCESS_NETWORK_STATE - the yt-dlp engine, the headless WebView
-            fallback and ExoPlayer's media fetches.
-        `hardwareAccelerated` is enabled below so the background WebView (fallback source)
-        can render and run YouTube's player JavaScript.
+        Network permissions required by the native playback provider:
+          * INTERNET / ACCESS_NETWORK_STATE - the YouTube player-API resolve and
+            ExoPlayer's media fetches.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -21,7 +19,6 @@
         android:name=".SuzieeApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:extractNativeLibs="true"
         android:fullBackupContent="@xml/backup_rules"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
@@ -57,14 +54,6 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
-
-        <!--
-            Optional pre-warm helper for the headless WebView fallback (see ExtractionService).
-            It is never a foreground service and stops itself when idle.
-        -->
-        <service
-            android:name=".playback.ExtractionService"
-            android:exported="false" />
 
     </application>
 

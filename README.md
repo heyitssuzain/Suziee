@@ -26,7 +26,7 @@ Grab the latest APK straight from GitHub Releases — no login, no Play Store:
 ## ✨ Key Features
 
 - **Online Music Discovery** — real search querying YouTube Music InnerTube endpoints with suggestions and metadata.
-- **Block-Resistant Streaming** — yt-dlp resolves the exact requested video (signature + `n` handling) and a headless-WebView engine races it in parallel as a fallback; the first correct stream wins, with one automatic re-resolve if a stream dies mid-playback.
+- **Block-Resistant Streaming** — a native YouTube player-API client resolves the exact requested video to a direct audio stream in about a second, with one automatic re-resolve if a stream dies mid-playback. No Python runtime and no browser engine on the playback path.
 - **Notification & Lock Screen Controls** — title, artist and artwork with working Play/Pause, Next and Previous via Media3 `MediaSessionService`.
 - **Offline Downloads** — save permitted streams (progressive + HLS stitch) into app-private storage with live progress, percentage and retry-on-failure; fully playable offline.
 - **Trending For Everyone** — anime trending sections **plus** mainstream sections for general listeners (Bollywood, Hindi, English and international hits).

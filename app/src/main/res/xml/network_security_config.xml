@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Network configuration for the online playback engine.
+    Network configuration for the online playback provider.
 
     Media traffic comes from two kinds of endpoints, all of which are HTTPS but may
     hand out HTTP media segment URLs or redirects:
-      * googlevideo.com          - YouTube audio, resolved by yt-dlp or the WebView fallback
-      * youtube.com / ytimg.com  - yt-dlp metadata and the headless browser session
+      * googlevideo.com          - direct YouTube audio URLs
+      * youtube.com / ytimg.com  - search, the player-API resolve, artwork and lyrics
 
     Cleartext is permitted so a redirect to an http:// CDN host cannot silently break
     playback. System trust anchors are used for TLS.

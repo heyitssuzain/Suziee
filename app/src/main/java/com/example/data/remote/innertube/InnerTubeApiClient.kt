@@ -15,16 +15,10 @@ import java.util.concurrent.TimeUnit
 /**
  * YouTube Music search / suggestion client.
  *
- * IMPORTANT: this client only performs *search*. The old `resolveStream()` player
- * extraction was removed on purpose - every anonymous Innertube client (ANDROID,
- * ANDROID_VR, IOS, WEB, WEB_REMIX, TVHTML5*, ...) now answers LOGIN_REQUIRED,
- * UNPLAYABLE or HTTP 400/404, so calling it only wasted time and bandwidth.
- *
- * Playable YouTube audio is obtained one layer up, in
- * `com.example.data.remote.streaming.OnlineStreamResolver`: yt-dlp is tried first, with
- * `com.example.data.remote.extraction.SecureExtractionEngine` (a real headless browser
- * session) as the fallback for YouTube's PoToken / `n`-param challenge. This client is
- * search-only.
+ * IMPORTANT: this client only performs *search*. Stream extraction lives in
+ * `com.example.data.remote.innertube.YouTubeAudioResolver`: the anonymous web player no
+ * longer exposes direct URLs (SABR-only), but the Android-VR player endpoint, called with
+ * a visitor session, still returns ordinary signed `googlevideo.com` audio URLs.
  */
 class InnerTubeApiClient {
 
