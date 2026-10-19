@@ -235,9 +235,33 @@ jobs:
 
           echo "Release published: https://github.com/${GITHUB_REPOSITORY}/releases/latest"
 
+      # A real gate: a failing unit test fails the run. The previous revision ran this step
+      # with `continue-on-error: true`, which silently swallowed a failing assertion, so a
+      # green build did *not* actually prove the matching gate was correct.
       - name: Run unit tests
+        run: |
+          set +e
+          gradle testDebugUnitTest --stacktrace > test.log 2>&1
+          STATUS=$?
+          echo "===== TEST OUTPUT (tail) ====="
+          tail -n 40 test.log
+          echo "===== TEST ERRORS ====="
+          grep -E "^e: |error: |FAILED|tests completed" test.log | head -30 || true
+          exit $STATUS
+
+      # Emit the failures as check-run annotations: GitHub does not expose Actions step logs
+      # to unauthenticated clients, but annotations are readable without auth.
+      - name: Publish test failures
+        if: failure()
         continue-on-error: true
-        run: gradle testDebugUnitTest --stacktrace
+        run: |
+          set +e
+          grep -rhoE '<failure[^>]*message="[^"]{0,160}' \
+            app/build/test-results/testDebugUnitTest 2>/dev/null | head -8 \
+            | while IFS= read -r line; do echo "::error::TESTFAIL ${line}"; done
+          grep -E "^e: |error: |FAILED|Execution failed for task" test.log 2>/dev/null | head -12 \
+            | while IFS= read -r line; do echo "::error::TESTLOG ${line}"; done
+          exit 0
 
       - name: Write job summary
         if: always()

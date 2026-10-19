@@ -185,8 +185,8 @@ class SoundCloudStrictMatchTest {
 
     @Test
     fun `rejects a weak title match that the artist does not corroborate`() {
-        // "Shape of You Lofi Chill Remake": no marker word, but only a partial title
-        // overlap (0.5) - so it needs the artist, which is nowhere to be found.
+        // "Shape of You Lofi Chill Remake": its own title says it is another recording
+        // (lofi / remake), so it must not be played for a plain official request.
         val acceptable = SoundCloudMatch.isAcceptableSubstitute(
             wantedTitle = "Shape of You",
             wantedArtist = "Ed Sheeran",
@@ -196,6 +196,62 @@ class SoundCloudStrictMatchTest {
             candidateDurationMs = 233_000L
         )
         assertFalse(acceptable)
+    }
+
+    @Test
+    fun `rejects an upload whose uploader advertises a different recording`() {
+        val acceptable = SoundCloudMatch.isAcceptableSubstitute(
+            wantedTitle = "Believer",
+            wantedArtist = "Imagine Dragons",
+            wantedDurationMs = 204_000L,
+            candidateTitle = "Believer",
+            candidateUploader = "Slowed Sounds",
+            candidateDurationMs = 204_000L
+        )
+        assertFalse(acceptable)
+    }
+
+    @Test
+    fun `does not reject on a marker word that the request itself contains`() {
+        // A blanket "the candidate title contains a marker word" rule would refuse the
+        // official upload of a song that legitimately contains such a word.
+        val acceptable = SoundCloudMatch.isAcceptableSubstitute(
+            wantedTitle = "Lofi Girl",
+            wantedArtist = "Some Artist",
+            wantedDurationMs = 180_000L,
+            candidateTitle = "Lofi Girl",
+            candidateUploader = "Some Artist",
+            candidateDurationMs = 180_000L
+        )
+        assertTrue(acceptable)
+    }
+
+    @Test
+    fun `an ambiguous uploader word alone is not a conflict`() {
+        // "Live Nation" / "Acoustic Covers" style channel names must not reject a plain
+        // upload of the requested song: only conclusive markers are used for the uploader.
+        val acceptable = SoundCloudMatch.isAcceptableSubstitute(
+            wantedTitle = "Believer",
+            wantedArtist = "Imagine Dragons",
+            wantedDurationMs = 204_000L,
+            candidateTitle = "Believer",
+            candidateUploader = "Live Nation",
+            candidateDurationMs = 204_000L
+        )
+        assertTrue(acceptable)
+    }
+
+    @Test
+    fun `artist corroboration works from the uploader or from the title`() {
+        assertTrue(
+            SoundCloudMatch.artistCorroborates("Ed Sheeran", "Shape of You", "Ed Sheeran")
+        )
+        assertTrue(
+            SoundCloudMatch.artistCorroborates("Ed Sheeran", "Ed Sheeran - Shape of You", "x")
+        )
+        assertFalse(
+            SoundCloudMatch.artistCorroborates("Ed Sheeran", "Shape of You Lofi", "x")
+        )
     }
 
     // ---------------------------------------------------------------------------------

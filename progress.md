@@ -76,10 +76,11 @@ is a different recording"**:
 
 | Rejected (a different recording) | Accepted |
 |---|---|
-| decorated upload — slowed / reverb / remix / sped up / nightcore / 8D / bass boosted / mashup / bootleg / cover / karaoke / instrumental / tribute / live / acoustic / reaction (unless the user asked for one) | same title + same artist + same length |
+| decorated upload — slowed / reverb / remix / sped up / nightcore / 8D / bass boosted / mashup / bootleg / cover / karaoke / instrumental / tribute / live / acoustic / reaction / remake / lofi / rework / reprise / type beat (unless the user asked for one **or the word is part of the user's own request**) | same title + same artist + same length |
 | clearly different title (similarity < 0.45) | title agrees, **duration unknown** |
 | clearly different length (±15 s / 10 %, only when both are known) | title agrees, **placeholder/absent artist** (`Unknown Artist`, `YouTube Music`, …) |
-| weak title (< 0.75) **and** the artist is not corroborated by uploader or title | **unlabelled re-upload of the same title/length** (indistinguishable by metadata) |
+| an uploader that advertises a conclusive marker (slowed / nightcore / lofi / cover / … — ambiguous words like "live"/"acoustic" are excluded so "Live Nation" cannot reject a valid upload) | **unlabelled re-upload of the same title/length** (indistinguishable by metadata) |
+| a weak title (< 0.75) that the artist neither corroborates through the uploader nor by appearing in the upload title | a weak title whose artist *is* corroborated by the uploader or the upload title |
 
 Missing metadata never causes a rejection. Explicit alternate-version requests are preserved
 (marker words are stripped from *both* sides before the title comparison, so
@@ -130,7 +131,8 @@ Missing metadata never causes a rejection. Explicit alternate-version requests a
 | `app/src/main/java/com/example/playback/MusicPlayerManager.kt` | hedged fallback, off-path history write, 2×400 ms fallback retries, early service start, latency logs, reworded honest error |
 | `app/src/main/java/com/example/playback/MediaPlaybackService.kt` | session/controller/task-removed diagnostics |
 | `app/src/main/java/com/example/MainActivity.kt` | POST_NOTIFICATIONS requested from `onStart()`, failures/results/notification state logged |
-| `app/src/test/java/com/example/SoundCloudStrictMatchTest.kt` | rewritten for the new gate: 17 cases incl. the exact failing screenshot case and the "missing metadata must not reject" regressions |
+| `app/src/test/java/com/example/SoundCloudStrictMatchTest.kt` | rewritten for the new gate: 21 cases incl. the exact failing screenshot case, the "missing metadata must not reject" regressions, and the request-aware marker rules |
+| `.github/workflows/android-apk.yml` | unit tests are now a blocking gate; test failures are re-emitted as `::error::` annotations |
 | `progress.md` | this file |
 
 Not touched: Room/DB, downloads, playlists, favourites, history, lyrics, voice commands,
@@ -138,14 +140,31 @@ trending/anime rails, Compose UI/onboarding, theme, app id/version/signing, CI w
 
 ## Actual test results
 
-* **Automated (CI, GitHub Actions `android-apk.yml`)** — see the run for the pass-3 commit:
-  Kotlin/AGP compile, `assembleRelease` with the release keystore, lint gate, unit tests, APK
-  packaging and the `v1.2-build-N` release. Results recorded here after the run completes.
-  * `testDebugUnitTest` is what proves the gate change: the 17 `SoundCloudStrictMatchTest` cases
-    include `Starboy (feat. Daft Punk)` (the screenshot) and the two "metadata is missing but
-    the candidate agrees → accept" regressions. Note the CI step runs with
-    `continue-on-error: true`, so a green build alone is not proof the tests passed — the step
-    outcome is checked separately.
+* **Automated (CI, GitHub Actions `android-apk.yml`)**
+  * **Run #22** (commit `a00dda5`, the first pass-3 commit) — build, lint, APK upload and
+    release publish all green: **`v1.2-build-22`** was published with `Suziee.apk`
+    (23,834,871 bytes, `sha256:693a22ec…`, different from build 21's `67cc464e…`, so the
+    pass-3 code is in that APK).
+  * **That green step list was misleading, and saying so matters.** Run #22 carried a
+    hidden check-run annotation `failure: Process completed with exit code 1` while every
+    step reported `success`. The cause: the unit-test step ran with
+    `continue-on-error: true`, so a **failing assertion was swallowed** and the run still
+    looked green. Reading the annotation is how it was caught — not by trusting the steps.
+  * The failing case was my own new expectation in
+    `rejects a weak title match that the artist does not corroborate`:
+    `similarity()` applies a containment bonus, so `"shape of you lofi chill remake"`
+    scores **0.8 ≥ 0.75** against `"shape of you"` and the weak-title branch was never
+    reached. That was a real gap in the gate, not just a bad test: a "Lofi … Remake"
+    upload would have been accepted for a plain official request.
+  * Fixes: markers are now evaluated **against the user's own request** (a marker word
+    already present in the request is never a conflict, so the official "Lofi Girl" upload
+    is safe), the marker list gained `lofi`/`lo-fi`/`remake`/`rework`/`reprise`/`type beat`
+    … and uploader-based rejection only uses conclusive markers. Tests grew to **21 cases**.
+  * The CI unit-test step is now a **real gate**: `continue-on-error` removed, output
+    captured to `test.log`, and failures re-emitted as `::error::` annotations (readable
+    without GitHub auth) so a red run is diagnosable.
+  * Latest run for the current commit: see the `v1.2-build-N` release of the newest push —
+    build, lint, tests, packaging and publishing outcomes are recorded there.
 * **Not verifiable here (no Android device)**: live YouTube sniffing, real SoundCloud
   responses, actual audible output, and the system notification/lock-screen surfaces. Anything
   in the list below is **CODE FIXED BUT DEVICE UNVERIFIED**, never "fixed and verified".

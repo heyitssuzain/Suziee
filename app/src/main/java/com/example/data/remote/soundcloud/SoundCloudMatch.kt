@@ -20,7 +20,9 @@ import kotlin.math.abs
  * often simply absent:
  *
  *  - decorated uploads (slowed / reverb / remix / cover / live ...) are rejected unless the
- *    user explicitly asked for an alternate version,
+ *    user explicitly asked for an alternate version - and a marker word that the user's own
+ *    request already contains is never treated as a conflict, so asking for "Lofi Girl"
+ *    cannot reject the official "Lofi Girl" upload,
  *  - a clearly different title is rejected,
  *  - a clearly different length is rejected when both sides know their duration,
  *  - a *weak* title match additionally needs the artist to corroborate (uploader similarity
@@ -39,8 +41,23 @@ internal object SoundCloudMatch {
         listOf(
             "slowed", "reverb", "remix", "sped up", "nightcore", "8d", "16d",
             "bass boosted", "mashup", "bootleg", "cover", "karaoke", "instrumental",
-            "tribute", "live", "acoustic", "reaction"
+            "tribute", "live", "acoustic", "reaction", "remake", "lofi", "lo-fi",
+            "rework", "reworked", "reprise", "refix", "type beat", "chopped", "screwed"
         )
+
+    /**
+     * The subset that is conclusive enough to reject on the **uploader name** as well.
+     *
+     * Words like "live" or "acoustic" are deliberately excluded here: they describe a
+     * different recording when they appear in a track title, but they are also common in
+     * channel names ("Live Nation", "Acoustic Covers"), and a false rejection is exactly
+     * the bug this gate must not reintroduce.
+     */
+    private val STRONG_UPLOADER_MARKERS = listOf(
+        "slowed", "reverb", "nightcore", "sped up", "bass boosted", "8d", "16d",
+        "remix", "cover", "karaoke", "mashup", "bootleg", "reaction", "remake",
+        "lofi", "lo-fi", "rework", "reworked", "type beat"
+    )
 
     /** Word-boundary matcher so "deliver"/"discover" are not read as live/cover. */
     private val MARKER_REGEX = Regex(
@@ -130,8 +147,23 @@ internal object SoundCloudMatch {
         // 1. A decorated upload is a different recording - unless that is what was asked for.
         val requestedAlternate = requestsAlternateVersion(wantedTitle, wantedArtist)
         if (!requestedAlternate) {
-            if (hasAlternateVersionMarker(candidateTitle)) return false
-            if (hasAlternateVersionMarker(candidateUploader)) return false
+            // A marker that also appears in the *request* is not a conflict: if the user
+            // asked for "Lofi Girl", a plain "Lofi Girl" upload is exactly right - rejecting
+            // it because of its own title is the false-rejection bug all over again.
+            for (marker in ALTERNATE_VERSION_MARKERS) {
+                if (containsMarker(candidateTitle, marker) &&
+                    !containsMarker(wantedTitle, marker)
+                ) {
+                    return false
+                }
+            }
+            for (marker in STRONG_UPLOADER_MARKERS) {
+                if (containsMarker(candidateUploader, marker) &&
+                    !containsMarker(wantedArtist, marker)
+                ) {
+                    return false
+                }
+            }
         }
 
         // When an alternate version was requested the marker words are expected, so they
