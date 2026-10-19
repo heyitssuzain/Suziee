@@ -59,7 +59,11 @@ internal object YtDlpStreamParser {
 
         return StreamInfo(
             url = cleaned,
-            mimeType = if (isHls) HLS_MIME else mimeFor(formatId, extension),
+            mimeType = if (isHls) {
+                HLS_MIME
+            } else {
+                mimeFor(formatId, extension) ?: mimeFromUrl(cleaned)
+            },
             headers = sanitizeHeaders(headers)
         )
     }
@@ -95,6 +99,24 @@ internal object YtDlpStreamParser {
             .filter { it.key.lowercase() !in BLOCKED_HEADERS }
             .take(MAX_HEADERS)
             .associate { it.key to it.value }
+    }
+
+    /**
+     * `--get-url` only prints the URL, so the container is read from the googlevideo
+     * query (`mime=audio%2Fwebm`, `itag=251`). Media3 can sniff the rest, but a hint on
+     * an extension-less `videoplayback` URL is what keeps first-play robust.
+     */
+    private fun mimeFromUrl(url: String): String? {
+        val lower = url.lowercase()
+        return when {
+            "mime=audio%2fwebm" in lower || "mime=audio/webm" in lower -> AUDIO_WEBM
+            "mime=audio%2fmp4" in lower || "mime=audio/mp4" in lower -> AUDIO_MP4
+            "mime=audio%2fmpeg" in lower || "mime=audio/mpeg" in lower -> AUDIO_MPEG
+            "mime=audio%2fogg" in lower || "mime=audio/ogg" in lower -> AUDIO_OGG
+            "itag=139" in lower || "itag=140" in lower -> AUDIO_MP4
+            "itag=249" in lower || "itag=250" in lower || "itag=251" in lower -> AUDIO_WEBM
+            else -> null
+        }
     }
 
     private const val GOOGLEVIDEO_HOST = "googlevideo.com"

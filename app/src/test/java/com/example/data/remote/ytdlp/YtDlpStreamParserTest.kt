@@ -123,8 +123,22 @@ class YtDlpStreamParserTest {
     }
 
     @Test
-    fun hlsManifestGetsTheExactMedia3MimeType() {
-        val stream = YtDlpStreamParser.toStreamInfo(
+    fun infersTheContainerFromTheGooglevideoQuery() {
+        val webm = "https://rr3---sn-abc.googlevideo.com/videoplayback?itag=251&mime=audio%2Fwebm"
+        val m4a = "https://rr3---sn-abc.googlevideo.com/videoplayback?itag=140&mime=audio%2Fmp4"
+
+        assertEquals(
+            "audio/webm",
+            YtDlpStreamParser.toStreamInfo(webm, null, null, null)?.mimeType
+        )
+        assertEquals(
+            "audio/mp4",
+            YtDlpStreamParser.toStreamInfo(m4a, null, null, null)?.mimeType
+        )
+    }
+
+    @Test
+    fun hlsManifestGetsTheExactMedia3MimeType() {        val stream = YtDlpStreamParser.toStreamInfo(
             "https://manifest.googlevideo.com/api/manifest/hls_playlist/expire/1/id/abc",
             formatId = null,
             extension = null,

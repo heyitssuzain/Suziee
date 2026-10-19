@@ -6,7 +6,6 @@ import android.util.Log
 import com.example.domain.model.StreamInfo
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
-import com.yausername.youtubedl_android.mapper.VideoInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * ## Speed choices
  *  * `-f 251/140/bestaudio` selects a single, progressive audio-only stream (Opus WebM
  *    first, AAC/MP4 second) - no video is downloaded and no muxing/ffmpeg is involved.
- *  * `--dump-json` + `--skip-download` resolves the URL without writing media to disk.
+ *  * `--get-url` + `--skip-download` resolves the URL without writing media to disk and
+ *    without parsing a large JSON document.
  *  * `--no-playlist` prevents a playlist id from turning one tap into a multi-item job.
  *  * `--socket-timeout 5` plus a hard watchdog bound the worst case; the watchdog kills
  *    the child process, so a dead network cannot leave a Python process behind.
@@ -152,7 +152,10 @@ object SuzieeAudioExtractor {
     private fun extract(videoId: String, timeoutMs: Long): StreamInfo? {
         val request = YoutubeDLRequest(YtDlpStreamParser.watchUrl(videoId)).apply {
             addOption("-f", FORMAT_SELECTOR)
-            addOption("--dump-json")
+            // Print the resolved URL only. This is intentionally not --dump-json: the
+            // JSON parser in youtubedl-android depends on Jackson at runtime only, and a
+            // single URL is all ExoPlayer needs.
+            addOption("--get-url")
             addOption("--skip-download")
             addOption("--no-playlist")
             addOption("--no-warnings")
@@ -176,27 +179,25 @@ object SuzieeAudioExtractor {
 
         return try {
             val response = YoutubeDL.getInstance().execute(request, processId)
-            val info: VideoInfo? = YoutubeDL.objectMapper.readValue(
-                response.out,
-                VideoInfo::class.java
-            )
+            // `--no-playlist` + a single-format selector prints exactly one URL. Take the
+            // first non-blank line; the parser then validates it is HTTPS googlevideo.
+            val reportedUrl = response.out.lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.isNotEmpty() }
+
             val stream = YtDlpStreamParser.toStreamInfo(
-                url = info?.url,
-                formatId = info?.formatId,
-                extension = info?.ext,
-                headers = info?.httpHeaders
+                url = reportedUrl,
+                formatId = null,
+                extension = null,
+                headers = null
             )
             if (stream == null) {
-                Log.w(
-                    TAG,
-                    "yt-dlp returned no playable URL for $videoId " +
-                        "(format=${info?.formatId}, ext=${info?.ext})"
-                )
+                Log.w(TAG, "yt-dlp returned no playable URL for $videoId (out=${reportedUrl?.take(80)})")
             } else {
                 Log.i(
                     TAG,
                     "yt-dlp resolved $videoId in ${SystemClock.elapsedRealtime() - startedAt}ms " +
-                        "(format=${info?.formatId}, mime=${stream.mimeType ?: "sniffed"})"
+                        "(mime=${stream.mimeType ?: "sniffed"})"
                 )
             }
             stream
