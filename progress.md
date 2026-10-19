@@ -3,16 +3,123 @@
 Date: 19 Oct 2026 · Base: `v1.2-build-21` · Scope: smallest safe changes, no feature removals,
 no data loss, no identity/signing change.
 
-Eight fix passes are recorded here. **Pass 8 (below) is the current, authoritative one**: it
-removes yt-dlp and the headless WebView entirely and replaces both with a native YouTube
-player-API client that returns direct audio URLs in under a second. Pass 7 fixed the
-"every song fails" regression in build 29 by removing an IPv6 stall that made yt-dlp miss
-its deadline; pass 6 introduced the yt-dlp engine; pass 5 tightened identity verification;
-pass 4 replaced the primary extraction source with the pre-warmed headless engine; pass 3
-is kept for its evidence trail: pass 2 had made official songs *stop playing entirely*, and
-pass 3 removed that regression instead of adding another layer of tightening.
+Nine fix passes are recorded here. **Pass 9 (below) is the current, authoritative one**: the
+on-device 403 was googlevideo's new range/PO-token gate on the Android-VR URLs, and build 32
+switches to the ANDROID/IOS clients with the `params=2AMB` testsuite flag, which returns
+ordinary full-length audio URLs. Pass 8 removed yt-dlp and the headless WebView and replaced
+both with a native YouTube player-API client. Pass 7 fixed the "every song fails" regression
+in build 29 by removing an IPv6 stall that made yt-dlp miss its deadline; pass 6 introduced
+the yt-dlp engine; pass 5 tightened identity verification; pass 4 replaced the primary
+extraction source with the pre-warmed headless engine; pass 3 is kept for its evidence
+trail: pass 2 had made official songs *stop playing entirely*, and pass 3 removed that
+regression instead of adding another layer of tightening.
 
 ---
+
+# PASS 9 — on-device 403: Android-VR is range/PO-token gated; ANDROID `params=2AMB` fixes it (build 32)
+
+## The evidence from the user's logcat
+
+Build 31 resolved the URL successfully, then ExoPlayer failed a few seconds later:
+
+```
+I/YouTubeAudioResolver: Resolved vxUBYHz_q1I in 3730ms (itag=251, mime=audio/webm)
+I/PlaybackCoordinator: Resolved 'Attention' via INNERTUBE
+I/SuzieeMediaService: MediaItem transition (reason=3): 'Attention' by 'Charlie Puth'
+E/MusicPlayerManager: ExoPlayer error: Source error
+```
+
+So this was **not** a resolve failure and **not** a wrong-recording problem. The stream URL
+was produced correctly; googlevideo refused the media request.
+
+## Root cause: Android-VR URLs only serve the first ~1 MB
+
+I replayed the exact Android-VR URL outside the app. With no `Range` header (ExoPlayer's
+first request at position 0) googlevideo returns **403**. The only request that works is a
+bounded range starting at 0:
+
+| Request | Result |
+|---|---|
+| no `Range` header | **403** |
+| `Range: bytes=0-` | **403** |
+| `Range: bytes=0-131071` | 206 (works) |
+| `Range: bytes=0-950000` | 206 (works) |
+| `Range: bytes=0-999999` | **403** |
+| `Range: bytes=900000-1799999` (fresh URL) | **403** |
+| `Range: bytes=900000-` (open-ended) | **403** |
+| whole-file `bytes=0-<length>` | **403** |
+
+This is the GVS PO-token enforcement introduced in 2026: yt-dlp's issue #17348 documents
+that `android_vr` now requires a GVS PO token for everything except format 18, and the Kodi
+YouTube add-on's issue #1481 measures the same cutoff. The bundled yt-dlp in build 30 also
+failed a full audio download with 403, so this was a YouTube-side change, not an app bug.
+
+## The fix: ANDROID/IOS player clients with the testsuite `params=2AMB` flag
+
+The same player endpoint returns **ordinary direct URLs with no range gate** when the client
+is `ANDROID` or `IOS` and the body carries `params: "2AMB"` (the testsuite flag). The flag
+decodes to a single protobuf field (`field 59, varint 1`); without it those clients answer
+with SABR-only streaming data (zero direct URLs).
+
+Changed in `YouTubeAudioResolver.kt`:
+
+* `ANDROID_VR` is removed. Primary client is `ANDROID` (`clientName=ANDROID`, client id `3`,
+  version `21.26.364`, Android 11 UA, SDK 30); fallback is `IOS` (`clientName=IOS`, client id
+  `5`, version `21.26.4`).
+* Every player request now sends `params=2AMB`.
+* `StreamInfo.headers` uses the **winning client's** User-Agent, not the old VR UA.
+* A refused request still refreshes the visitor session once and retries both clients.
+
+## PC verification (exact request shape, 2026-10-19) — all passed
+
+| Song | Video id | ANDROID POST | Format | Full GET | Seek GET |
+|---|---|---|---|---|---|
+| Attention (official video) | `nfs8NYg7yQM` | 0.88 s | itag 251, `audio/webm` | **200**, 3,716,623 B | **206**, open-ended and bounded |
+| Attention (Topic audio) | `vxUBYHz_q1I` | 0.67–1.29 s | itag 251 | **200**, 3,477,177 B | **206**, 900,000 B |
+| Love Me Like You Do | `AJtDXIazrMo` | 0.80 s | itag 251 | **200**, 4,045,870 B | **206** |
+| Blinding Lights | `4NRXx6U8ABQ` | 0.81 s | itag 251 | **200**, 4,094,821 B | **206** |
+| Shape of You | `JGwWNGJdvx8` | 0.71 s | itag 251 | **200**, 4,159,651 B | **206** |
+| Believer | `7wtfhZwyrcc` | 0.87 s | itag 251 | **200**, 3,528,030 B | **206** |
+| Flowers | `G7KNmW9a75Y` | 0.76 s | itag 251 | **200**, 3,264,719 B | **206** |
+| As It Was | `H5v3kku4y6Q` | 0.89 s | itag 251 | **200**, 2,748,477 B | **206** |
+| Starboy | `34Na4j8AVgA` | 0.67 s | itag 251 | **200**, 4,873,928 B | **206** |
+
+Measured latency is **0.67–1.29 s** for a warm session, one POST per song, plus ExoPlayer's
+first buffer. All nine tracks returned itag 251 and accepted both a full GET and a ranged
+seek request, which is what ExoPlayer needs.
+
+## Automated verification (CI run #32, commit `7ebd43f`) — green
+
+`Build APK` and `Run unit tests` both succeeded: **26 tests, 0 failures**. Published release
+**`v1.2-build-32`**, `Suziee.apk` **23,835,291 bytes** (same size as build 31; no dependency
+was added):
+
+* https://github.com/heyitssuzain/Suziee/releases/download/v1.2-build-32/Suziee.apk
+* Stable latest URL: https://github.com/heyitssuzain/Suziee/releases/latest/download/Suziee.apk
+
+## Honest limits
+
+* **No Android device is available locally.** The PC test proves the exact HTTP flow, the
+  full-length response and the ranged seek response. It does not prove on-device ExoPlayer
+  decoding, audible output, OEM network behaviour, notification/lock-screen controls or
+  download writes. Build 32 still needs the two screenshot songs played on the phone.
+* `params=2AMB` is an **undocumented YouTube flag**. It works today and is the strongest
+  anonymous path found, but YouTube can close it. No client can guarantee "permanently
+  working"; the code logs the exact client, itag and failure stage so the next change is
+  diagnosable.
+* Captchas are not "bypassed". They are avoided because this path never loads the web UI.
+  If YouTube answers `LOGIN_REQUIRED` for a network, playback still fails honestly.
+* No substitute recording is ever played: the requested video id is the only id sent.
+
+If a song still fails, this log tag names the exact stage:
+
+```
+adb logcat -s YouTubeAudioResolver OnlineStreamResolver PlaybackCoordinator MusicPlayerManager SuzieeMediaService
+```
+
+---
+
+# PASS 8 — WebView cannot play YouTube any more; native player API replaces yt-dlp (build 31)
 
 # PASS 8 — WebView cannot play YouTube any more; native player API replaces yt-dlp (build 31)
 
