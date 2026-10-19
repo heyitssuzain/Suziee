@@ -90,7 +90,7 @@ class MusicPlayerManager(
      *
      * Media CDNs are picky: googlevideo answers 403 without a matching User-Agent and a
      * YouTube Referer. These are the baseline applied to every stream; a resolved
-     * [StreamInfo] can add or override entries (the Android-VR User-Agent used to obtain
+     * [StreamInfo] can add or override entries (the ANDROID/IOS User-Agent used to obtain
      * the URL).
      */
     private val baseMediaHeaders = mapOf(

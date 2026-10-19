@@ -32,13 +32,19 @@ import java.util.concurrent.TimeUnit
  * formats respectively, **zero** with a direct URL. A browser session therefore cannot
  * hand a playable stream to ExoPlayer at all.
  *
- * The Android-VR client is different: when the request carries the visitor data from a
- * normal YouTube page, it returns ordinary signed `googlevideo.com` URLs (HTTP 206,
- * `audio/mp4`). That is what this class does:
+ * Direct URLs still exist for the **ANDROID** and **IOS** clients when the player request
+ * carries the testsuite `params=2AMB` flag. Without that flag those clients are SABR-only.
+ * With it they return ordinary signed `googlevideo.com` URLs that accept normal full and
+ * ranged GETs, so ExoPlayer can start, seek and buffer for the whole song.
+ *
+ * (The old Android-VR path is deliberately gone: since August 2026 googlevideo gates it
+ * behind a GVS PO token, and without one it serves only the first ~1 MB and answers 403
+ * for every later range. That is exactly the on-device "Source error" this class fixes.)
  *
  *  1. fetch `https://m.youtube.com/` once per session to obtain `VISITOR_DATA` and the
  *     InnerTube API key (both are in YouTube's own bootstrap config),
- *  2. POST the video id to `/youtubei/v1/player` with the Android-VR client,
+ *  2. POST the video id to `/youtubei/v1/player` with the ANDROID client and
+ *     `params=2AMB` (IOS is the fallback),
  *  3. pick Opus 251 / AAC 140 and hand the URL to ExoPlayer with the matching headers.
  *
  * The session is cached in memory and in SharedPreferences, so after the first warm-up a
@@ -96,19 +102,22 @@ class YouTubeAudioResolver(context: Context) {
             return@withContext null
         }
 
-        // Fast path: Android-VR. Fallback: iOS, then one refreshed Android-VR attempt.
-        var format = requestPlayer(current, videoId, Client.ANDROID_VR)
+        // Fast path: ANDROID with the testsuite params. Fallback: IOS with the same
+        // params, then one fresh-session retry. Both return normal signed URLs; Android-VR
+        // is unusable now because googlevideo gates its media behind a GVS PO token.
+        var resolved = requestPlayer(current, videoId, Client.ANDROID)
             ?: requestPlayer(current, videoId, Client.IOS)
 
-        if (format == null) {
+        if (resolved == null) {
             Log.w(TAG, "Both clients failed for $videoId (${lastFailure}); refreshing session")
             val refreshed = ensureSession(refresh = true)
             if (refreshed != null) {
-                format = requestPlayer(refreshed, videoId, Client.ANDROID_VR)
+                resolved = requestPlayer(refreshed, videoId, Client.ANDROID)
+                    ?: requestPlayer(refreshed, videoId, Client.IOS)
             }
         }
 
-        if (format == null) {
+        if (resolved == null) {
             Log.w(
                 TAG,
                 "No playable stream for $videoId after " +
@@ -117,16 +126,17 @@ class YouTubeAudioResolver(context: Context) {
             return@withContext null
         }
 
+        val format = resolved.format
         Log.i(
             TAG,
             "Resolved $videoId in ${SystemClock.elapsedRealtime() - startedAt}ms " +
-                "(itag=${format.itag}, mime=${format.mimeType})"
+                "(client=${resolved.client.name}, itag=${format.itag}, mime=${format.mimeType})"
         )
         StreamInfo(
             url = format.url,
             mimeType = format.mimeType,
             headers = mapOf(
-                "User-Agent" to Client.ANDROID_VR.userAgent,
+                "User-Agent" to resolved.client.userAgent,
                 "Referer" to "https://www.youtube.com/",
                 "Origin" to "https://www.youtube.com",
                 "Accept-Language" to "en-US,en;q=0.9"
@@ -198,12 +208,16 @@ class YouTubeAudioResolver(context: Context) {
     /**
      * POSTs one `player` request and converts the response into a validated audio format.
      * Returns null on any HTTP error, non-OK playability status, or no playable audio.
+     *
+     * `params=2AMB` is the testsuite flag that makes the ANDROID/IOS clients return direct
+     * URLs instead of SABR-only data. It is what allows full-length playback and seeking;
+     * without it the media URLs are gated by googlevideo's GVS PO token check.
      */
     private fun requestPlayer(
         session: Session,
         videoId: String,
         clientType: Client
-    ): YouTubeAudioPolicy.AudioFormat? {
+    ): Resolved? {
         val requestBody = JSONObject().apply {
             put("context", JSONObject().apply {
                 put("client", clientType.toJson(session.visitorData))
@@ -211,6 +225,7 @@ class YouTubeAudioResolver(context: Context) {
             put("videoId", videoId)
             put("contentCheckOk", true)
             put("racyCheckOk", true)
+            put("params", PLAYER_PARAMS)
         }
 
         val request = Request.Builder()
@@ -266,8 +281,10 @@ class YouTubeAudioResolver(context: Context) {
                     lastFailure = "${clientType.name} returned only SABR/unplayable formats " +
                         "(${formats.size} entries)"
                     Log.w(TAG, "$lastFailure for $videoId")
+                    null
+                } else {
+                    Resolved(picked, clientType)
                 }
-                picked
             }
         } catch (e: Exception) {
             lastFailure = "${clientType.name} request failed: ${e.message}"
@@ -318,32 +335,41 @@ class YouTubeAudioResolver(context: Context) {
         }
     }
 
-    /** The two anonymous clients that are known to return direct URLs. */
+    /** A chosen format together with the client whose User-Agent must fetch it. */
+    private data class Resolved(
+        val format: YouTubeAudioPolicy.AudioFormat,
+        val client: Client
+    )
+
+    /**
+     * The two anonymous clients that return direct URLs when the request carries
+     * [PLAYER_PARAMS]. ANDROID is tried first because it was the fastest and most
+     * consistent in the 2026-10 probe; IOS is the fallback.
+     */
     private enum class Client(
         val clientId: String,
         val clientVersion: String,
         val userAgent: String,
-        val deviceMake: String,
-        val deviceModel: String,
+        val deviceMake: String?,
+        val deviceModel: String?,
         val osName: String,
         val osVersion: String,
         val androidSdk: Int?
     ) {
-        ANDROID_VR(
-            clientId = "28",
-            clientVersion = "1.65.10",
-            userAgent = "com.google.android.apps.youtube.vr.oculus/1.65.10 " +
-                "(Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-            deviceMake = "Oculus",
-            deviceModel = "Quest 3",
+        ANDROID(
+            clientId = "3",
+            clientVersion = "21.26.364",
+            userAgent = "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip",
+            deviceMake = null,
+            deviceModel = null,
             osName = "Android",
-            osVersion = "12L",
-            androidSdk = 32
+            osVersion = "11",
+            androidSdk = 30
         ),
         IOS(
             clientId = "5",
-            clientVersion = "20.10.4",
-            userAgent = "com.google.ios.youtube/20.10.4 " +
+            clientVersion = "21.26.4",
+            userAgent = "com.google.ios.youtube/21.26.4 " +
                 "(iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
             deviceMake = "Apple",
             deviceModel = "iPhone16,2",
@@ -355,8 +381,8 @@ class YouTubeAudioResolver(context: Context) {
         fun toJson(visitorData: String): JSONObject = JSONObject().apply {
             put("clientName", name)
             put("clientVersion", clientVersion)
-            put("deviceMake", deviceMake)
-            put("deviceModel", deviceModel)
+            deviceMake?.takeIf { it.isNotBlank() }?.let { put("deviceMake", it) }
+            deviceModel?.takeIf { it.isNotBlank() }?.let { put("deviceModel", it) }
             put("osName", osName)
             put("osVersion", osVersion)
             androidSdk?.let { put("androidSdkVersion", it) }
@@ -373,6 +399,13 @@ class YouTubeAudioResolver(context: Context) {
         private const val HOME_URL = "https://m.youtube.com/"
         private const val PLAYER_URL =
             "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+
+        /**
+         * Tests-params flag (`field 59 = 1`) that switches ANDROID/IOS from SABR-only
+         * responses to ordinary direct URLs. Confirmed against eight mainstream tracks on
+         * 2026-10-19: all returned itag 251, full GET 200 and ranged/seek GET 206.
+         */
+        private const val PLAYER_PARAMS = "2AMB"
 
         /** A browser-like UA for the page that carries the visitor data. */
         private const val PAGE_USER_AGENT =

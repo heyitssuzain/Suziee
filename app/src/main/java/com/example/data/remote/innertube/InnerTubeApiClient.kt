@@ -17,8 +17,8 @@ import java.util.concurrent.TimeUnit
  *
  * IMPORTANT: this client only performs *search*. Stream extraction lives in
  * `com.example.data.remote.innertube.YouTubeAudioResolver`: the anonymous web player no
- * longer exposes direct URLs (SABR-only), but the Android-VR player endpoint, called with
- * a visitor session, still returns ordinary signed `googlevideo.com` audio URLs.
+ * longer exposes direct URLs (SABR-only), but the ANDROID/IOS player endpoints called with
+ * the `params=2AMB` testsuite flag still return ordinary signed `googlevideo.com` URLs.
  */
 class InnerTubeApiClient {
 

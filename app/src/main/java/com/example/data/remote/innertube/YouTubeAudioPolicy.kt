@@ -44,7 +44,7 @@ internal object YouTubeAudioPolicy {
      *
      * Both values are part of YouTube's own bootstrap config and are required by the
      * `youtubei/v1/player` request; without the visitor data the API answers
-     * `LOGIN_REQUIRED` for an anonymous Android-VR client.
+     * `LOGIN_REQUIRED` for the anonymous player clients.
      */
     fun parseSession(html: String?): Session? {
         if (html.isNullOrBlank()) return null

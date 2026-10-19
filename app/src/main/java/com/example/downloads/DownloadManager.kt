@@ -207,7 +207,7 @@ class DownloadManager(
         }
         val destinationFile = File(musicDir, "$baseName.$extension")
 
-        // The resolver returns the headers the CDN expects (Android-VR User-Agent /
+        // The resolver returns the headers the CDN expects (ANDROID/IOS User-Agent /
         // Referer). Keep the generic media UA as a baseline; a per-stream header overrides
         // it.
         val requestHeaders = mutableMapOf(

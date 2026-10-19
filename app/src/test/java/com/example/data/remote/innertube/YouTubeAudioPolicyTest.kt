@@ -12,7 +12,7 @@ import org.junit.Test
  * The important one is [skipsSabrOnlyFormats]: YouTube's web clients now return
  * `adaptiveFormats` entries without a `url` (SABR only). The old WebView provider handed
  * those to ExoPlayer and every song failed; the native provider must reject them and use
- * the Android-VR response instead.
+ * the ANDROID/IOS response instead.
  */
 class YouTubeAudioPolicyTest {
 
