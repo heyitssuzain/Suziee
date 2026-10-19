@@ -22,6 +22,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
+import com.example.data.remote.extraction.HeadlessExtractorRepository
 import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.repository.MusicRepository
 import com.example.domain.model.StreamInfo
@@ -55,8 +56,8 @@ enum class RepeatMode {
 private enum class StreamSource {
     NONE,
 
-    /** Captured by the headless WebView sniffer (primary). */
-    YOUTUBE_SNIFFER,
+    /** Captured by the pre-warmed headless extraction engine (primary). */
+    YOUTUBE_EXTRACTOR,
 
     /** Resolved through the SoundCloud public API (fallback). */
     SOUNDCLOUD,
@@ -89,12 +90,20 @@ class MusicPlayerManager(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     /**
+     * PRIMARY source: the pre-warmed headless extraction engine.
+     *
+     * Created once and reused for every resolve, so its warm WebView pool (and the Chromium
+     * instance behind it) survives between songs.
+     */
+    private val extractor = HeadlessExtractorRepository.get(context)
+
+    /**
      * Default media HTTP headers.
      *
      * Media CDNs are picky: googlevideo answers 403 without a matching User-Agent and a
      * YouTube Referer. These are the baseline applied to every stream; a resolved
      * [StreamInfo] can add or override entries (e.g. the browser session Cookie the
-     * WebView sniffer captured, or a SoundCloud Referer).
+     * headless extraction engine captured, or a SoundCloud Referer).
      */
     private val baseMediaHeaders = mapOf(
         "User-Agent" to InnerTubeApiClient.MEDIA_USER_AGENT,
@@ -152,11 +161,14 @@ class MusicPlayerManager(
         )
         // Step used by the notification's / lock screen's seek-back and seek-forward
         // buttons (these setters live on the builder in Media3 1.5.x). The next/previous
-        // *track* buttons are advertised by the MediaSession in MediaPlaybackService.
+        // *track* buttons are advertised by the MediaSession in MusicPlaybackService.
         .setSeekBackIncrementMs(SEEK_INCREMENT_MS)
         .setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
         .build()
         .apply {
+            // Audio focus enabled (`handleAudioFocus = true`): ducking, pausing for calls and
+            // resuming afterwards are handled by Media3/ExoPlayer, and a focus loss never
+            // leaves a stale notification behind.
             val audioAttributes = AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -171,7 +183,7 @@ class MusicPlayerManager(
     private var progressTrackerJob: Job? = null
     private var originalQueue: List<Track> = emptyList()
 
-    /** The in-flight resolve/sniff job. Cancelled when the user picks another track. */
+    /** The in-flight resolve/extraction job. Cancelled when the user picks another track. */
     private var resolveJob: Job? = null
 
     /** Where the currently loaded stream came from (drives the error failover). */
@@ -255,10 +267,10 @@ class MusicPlayerManager(
                 val resumePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
 
                 // Failover trigger #2 from the spec ("persistent playback error"):
-                // a sniffed YouTube URL can go stale - signatures expire and SABR chunks
+                // a captured YouTube URL can go stale - signatures expire and SABR chunks
                 // end mid-stream. Rather than dead-ending on an error, silently re-resolve
                 // this one track through SoundCloud. Guarded so we only escalate once.
-                if (currentSource == StreamSource.YOUTUBE_SNIFFER && !soundCloudTriedForCurrentTrack) {
+                if (currentSource == StreamSource.YOUTUBE_EXTRACTOR && !soundCloudTriedForCurrentTrack) {
                     Log.w(TAG, "YouTube stream failed mid-playback - switching to SoundCloud fallback")
                     soundCloudTriedForCurrentTrack = true
                     failoverToSoundCloud(track, resumePositionMs)
@@ -320,11 +332,21 @@ class MusicPlayerManager(
      */
     private fun ensurePlaybackServiceStarted() {
         try {
-            val intent = Intent(context, MediaPlaybackService::class.java)
+            val intent = Intent(context, MusicPlaybackService::class.java)
             context.startService(intent)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start MediaPlaybackService: ${e.message}", e)
+            Log.e(TAG, "Failed to start MusicPlaybackService: ${e.message}", e)
         }
+    }
+
+    /**
+     * Asks for a warm extraction engine (see [ExtractionService]).
+     *
+     * Purely an optimisation: if it is refused (some OEM background-start restrictions) the
+     * engine simply starts cold on the first resolve, and the extractor still runs.
+     */
+    private fun ensureExtractorWarm() {
+        ExtractionService.ensureStarted(context)
     }
 
     fun playTrack(track: Track, newQueue: List<Track> = listOf(track)) {
@@ -360,13 +382,15 @@ class MusicPlayerManager(
      * architecture:
      *
      *  1. **Local file** - if the track has been downloaded, just play it.
-     *  2. **PRIMARY - headless WebView sniffer**: a real, invisible YouTube browser
-     *     session. It is the only thing that can produce a working (n-transformed)
-     *     googlevideo URL, because YouTube's `n` challenge must be solved by their own JS.
-     *  3. **FALLBACK - SoundCloud public API**: used automatically when the sniffer does
-     *     not capture a stream inside `YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS` (8s). It is
-     *     resolved in parallel (hedged) once the sniffer has been running for
-     *     `FALLBACK_HEDGE_DELAY_MS`, so a sniffer failure does not add a second wait.
+     *  2. **PRIMARY - headless extraction engine**: a pre-warmed, invisible Chromium session
+     *     running YouTube's own player. It is the only thing that can produce a working
+     *     (n-transformed) googlevideo URL, because YouTube's `n` challenge must be solved by
+     *     their own JavaScript. The engine prefers the fully signed media request the page
+     *     makes and falls back to the audio-only format from the page's player response.
+     *  3. **FALLBACK - SoundCloud public API**: used automatically when the engine does not
+     *     capture a stream inside `HeadlessExtractorRepository.SNIFF_TIMEOUT_MS` (8s). It is
+     *     resolved in parallel (hedged) once the engine has been running for
+     *     `FALLBACK_HEDGE_DELAY_MS`, so an engine failure does not add a second wait.
      *
      * The custom native UI is untouched by all of this: it simply observes
      * [PlaybackState.isLoading], which stays true from the moment a song is tapped until
@@ -374,7 +398,7 @@ class MusicPlayerManager(
      */
     private fun resolveAndStartPlayback(track: Track) {
         // A new selection always wins: drop whatever the previous track was doing
-        // (including a WebView that may still be sniffing) and reset the failover guard.
+        // (including a WebView that may still be extracting) and reset the failover guard.
         resolveJob?.cancel()
         soundCloudTriedForCurrentTrack = false
         transientRetryUsed = false
@@ -389,6 +413,9 @@ class MusicPlayerManager(
                 // playback starts, so the notification/lock-screen surfaces cannot miss the
                 // first update. Idempotent (see ensurePlaybackServiceStarted).
                 ensurePlaybackServiceStarted()
+                // Same idea for the primary source: ask for a warm extraction engine while
+                // this resolve is starting, so a follow-up track finds it already up.
+                ensureExtractorWarm()
 
                 // Record to history off the critical path: a DB write must never delay
                 // resolution or playback. Failures are logged, nothing more.
@@ -410,8 +437,8 @@ class MusicPlayerManager(
                     return@launch
                 }
 
-                // 2. + 3. Remote: sniffer first, SoundCloud fallback second.
-                val streamInfo = resolveRemoteStream(track, useSniffer = true)
+                // 2. + 3. Remote: headless extraction engine first, SoundCloud fallback second.
+                val streamInfo = resolveRemoteStream(track, usePrimary = true)
                 if (streamInfo == null) {
                     Log.e(TAG, "Both sources failed for ${track.title}")
                     _playbackState.update {
@@ -443,22 +470,22 @@ class MusicPlayerManager(
     /**
      * Tries the two remote sources in order and remembers which one won.
      *
-     * @param useSniffer false to skip straight to SoundCloud (used by the failover).
+     * @param usePrimary false to skip straight to SoundCloud (used by the failover).
      */
-    private suspend fun resolveRemoteStream(track: Track, useSniffer: Boolean): StreamInfo? {
+    private suspend fun resolveRemoteStream(track: Track, usePrimary: Boolean): StreamInfo? {
         // A YouTube id means the user asked for a specific catalogue recording. If the
-        // sniffer cannot produce it, SoundCloud may only be used as an acceptable
+        // extractor cannot produce it, SoundCloud may only be used as an acceptable
         // substitute - never an unrelated/slowed/cover recording.
         val officialRequest = looksLikeYouTubeVideoId(track.id)
 
-        if (useSniffer && officialRequest) {
-            Log.i(TAG, "PRIMARY: sniffing YouTube via headless WebView (${track.id})")
+        if (usePrimary && officialRequest) {
+            Log.i(TAG, "PRIMARY: extracting YouTube stream via headless Chromium (${track.id})")
             val startedAt = SystemClock.elapsedRealtime()
 
             // Hedged request: the fallback resolve is started in the background while the
-            // sniffer is still working, but only after HEDGE_DELAY_MS - so a normal, fast
-            // sniffer (usually well under 2s) costs no extra network call at all, while a
-            // slow/failing sniffer no longer pays for the fallback *after* its 8s window.
+            // extractor is still working, but only after HEDGE_DELAY_MS - so a normal, fast
+            // extraction (usually well under 2s) costs no extra network call at all, while a
+            // slow/failing extractor no longer pays for the fallback *after* its 8s window.
             // Only resolution is parallel; playback stays strictly single-source.
             // Scoped to the current resolve job so selecting another track cancels it too.
             val hedgedFallback = CoroutineScope(currentCoroutineContext()).async {
@@ -466,14 +493,14 @@ class MusicPlayerManager(
                     delay(FALLBACK_HEDGE_DELAY_MS)
                     Log.i(
                         TAG,
-                        "HEDGE: sniffer still unresolved after ${FALLBACK_HEDGE_DELAY_MS}ms - " +
+                        "HEDGE: extractor still unresolved after ${FALLBACK_HEDGE_DELAY_MS}ms - " +
                             "resolving SoundCloud in parallel"
                     )
                     resolveSoundCloudWithRetry(track, strict = officialRequest)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    // Never let the hedge fail the resolve job: the sniffer may still win.
+                    // Never let the hedge fail the resolve job: the extractor may still win.
                     Log.w(TAG, "Hedged fallback failed: ${e.message}")
                     null
                 }
@@ -483,33 +510,33 @@ class MusicPlayerManager(
             // outdated (very common on a friend's phone) throws while being constructed. If
             // that exception escaped, the SoundCloud fallback below would never run and the
             // user would see "Could not play this track" even though a stream was available.
-            val sniffed = try {
-                YouTubeWebViewSniffer(context).sniff(track.id)
+            val extracted = try {
+                extractor.resolve(track.id)
             } catch (e: CancellationException) {
                 hedgedFallback.cancel()
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "Sniffer unavailable on this device (${e.message}) - using fallback")
+                Log.w(TAG, "Extractor unavailable on this device (${e.message}) - using fallback")
                 null
             }
             val elapsed = SystemClock.elapsedRealtime() - startedAt
 
-            if (sniffed != null) {
-                currentSource = StreamSource.YOUTUBE_SNIFFER
+            if (extracted != null) {
+                currentSource = StreamSource.YOUTUBE_EXTRACTOR
                 // The primary won: drop the hedged fallback (it is usually still waiting on
                 // its delay, so this normally also avoids the extra request entirely).
                 hedgedFallback.cancel()
                 Log.i(
                     TAG,
-                    "PRIMARY OK: ${sniffed.mimeType ?: "media"} stream in ${elapsed}ms"
+                    "PRIMARY OK: ${extracted.mimeType ?: "media"} stream in ${elapsed}ms"
                 )
-                return sniffed
+                return extracted
             }
 
             Log.w(
                 TAG,
-                "PRIMARY FAILED: sniffer gave no stream after ${elapsed}ms " +
-                    "(window ${YouTubeWebViewSniffer.SNIFF_TIMEOUT_MS}ms) - using hedged " +
+                "PRIMARY FAILED: extractor gave no stream after ${elapsed}ms " +
+                    "(window ${HeadlessExtractorRepository.SNIFF_TIMEOUT_MS}ms) - using hedged " +
                     "SoundCloud fallback (strict=$officialRequest)"
             )
 
@@ -541,11 +568,11 @@ class MusicPlayerManager(
      * SoundCloud fallback with a bounded retry.
      *
      * Deliberately short: the previous revision retried three times with a linear backoff,
-     * which added up to ~2.7s of pure waiting *after* the 8s sniffer window had already
+     * which added up to ~2.7s of pure waiting *after* the 8s extraction window had already
      * elapsed. Two attempts with a 400ms pause keeps one retry for a flaky connection
      * without turning a failure into a multi-second stall. It also does **not** touch
      * [currentSource] - the caller owns that, because during a hedged resolve this method
-     * can complete while the sniffer is still the source we are about to play.
+     * can complete while the extractor is still the source we are about to play.
      *
      * @param strict applies the substitution gate (see
      * [com.example.data.repository.MusicRepository.resolveStreamUrl]). When on and nothing
@@ -578,7 +605,7 @@ class MusicPlayerManager(
     }
 
     /**
-     * Re-resolves the current track through SoundCloud only. Called when a sniffed
+     * Re-resolves the current track through SoundCloud only. Called when a captured
      * YouTube stream dies mid-playback (expired signature / truncated SABR chunk).
      *
      * @param resumePositionMs playback continues from here so the user does not hear
@@ -590,7 +617,7 @@ class MusicPlayerManager(
             try {
                 _playbackState.update { it.copy(isLoading = true, errorMessage = null) }
 
-                val streamInfo = resolveRemoteStream(track, useSniffer = false)
+                val streamInfo = resolveRemoteStream(track, usePrimary = false)
                 if (streamInfo == null) {
                     _playbackState.update {
                         it.copy(
@@ -625,10 +652,18 @@ class MusicPlayerManager(
      * @param startPositionMs optional position to resume from (failover path).
      */
     private fun startPlayback(streamInfo: StreamInfo, track: Track, startPositionMs: Long = 0L) {
+        // Complete, immutable metadata for every surface at once: the notification panel and
+        // the lock screen render title/artist/artwork from *this* object, so it is built in
+        // full before the item is handed to the player. `isBrowsable = false` (the 1.5.x
+        // replacement for FOLDER_TYPE_NONE) + `isPlayable` tell the system this is a playable
+        // track and not a folder, which is what stops some OEM media controls from collapsing
+        // the notification into a folder row.
         val mediaMetadata = MediaMetadata.Builder()
             .setTitle(track.title)
             .setArtist(track.artist)
             .setArtworkUri(if (track.artworkUrl.isNotBlank()) Uri.parse(track.artworkUrl) else null)
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
             .build()
 
         val mediaItemBuilder = MediaItem.Builder()
@@ -655,7 +690,7 @@ class MusicPlayerManager(
         exoPlayer.playWhenReady = true
     }
 
-    /** YouTube video ids are 11 URL-safe characters; anything else skips the sniffer. */
+    /** YouTube video ids are 11 URL-safe characters; anything else skips the extractor. */
     private fun looksLikeYouTubeVideoId(id: String): Boolean =
         id.length == 11 && id.all { it.isLetterOrDigit() || it == '-' || it == '_' }
 
@@ -916,10 +951,10 @@ class MusicPlayerManager(
         private const val SOUNDCLOUD_RETRY_BACKOFF_MS = 400L
 
         /**
-         * How long the sniffer gets before the fallback resolve is started in parallel.
+         * How long the extractor gets before the fallback resolve is started in parallel.
          *
-         * A normal sniff resolves well inside this, so the hedge usually never fires and
-         * costs nothing at all. It only matters when the sniffer is slow or failing, where
+         * A normal extraction resolves well inside this, so the hedge usually never fires and
+         * costs nothing at all. It only matters when the extractor is slow or failing, where
          * it removes the second full wait from the user's startup time.
          */
         private const val FALLBACK_HEDGE_DELAY_MS = 3_000L

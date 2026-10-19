@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Suziee</string>
+    <!-- Name of the notification channel that carries the playback controls. -->
+    <string name="playback_notification_channel">Playback</string>
 </resources>

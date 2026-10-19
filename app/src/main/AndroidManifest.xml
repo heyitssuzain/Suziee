@@ -43,14 +43,27 @@
             </intent-filter>
         </activity>
 
+        <!--
+            The one and only media session service: the system notification panel, the lock
+            screen, Bluetooth controls and Android Auto all bind to it. Media3 promotes it to
+            a foreground service (type mediaPlayback) while playback is active.
+        -->
         <service
-            android:name=".playback.MediaPlaybackService"
+            android:name=".playback.MusicPlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!--
+            Optional pre-warm helper for the headless extraction engine (see ExtractionService).
+            It is never a foreground service and stops itself when idle.
+        -->
+        <service
+            android:name=".playback.ExtractionService"
+            android:exported="false" />
 
     </application>
 

@@ -6,12 +6,35 @@ import android.util.Log
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.example.R
 import com.example.SuzieeApplication
 
+/**
+ * The app's single media session service: the one place the Android OS binds to for the
+ * notification panel, the lock screen, Bluetooth/headset buttons, Android Auto and the
+ * "resume playback" resumption card.
+ *
+ * ## Why this shape
+ *  * The session is created **here**, inside the service, and is tied to the service's own
+ *    lifecycle - never created from an Activity, a Fragment or a ViewModel (a session owned
+ *    by a UI component dies with that component, which is what leaves the notification
+ *    dangling or missing).
+ *  * The player handed to the session is the app's **single** ExoPlayer instance owned by
+ *    [MusicPlayerManager], wrapped in [QueuePlayer]. There is no second player and no
+ *    second notification anywhere in the app.
+ *  * Foreground promotion is handled by Media3's `MediaSessionService` itself: as soon as a
+ *    session exists with a non-empty timeline and playback is starting, Media3 promotes the
+ *    service to the foreground with its own correctly configured media notification and
+ *    posts it on the channel configured in [onCreate]. Doing this by hand would fight
+ *    Media3's own notification manager, so we configure the channel/notification instead.
+ *  * `onGetSession` publishes the same session to every controller, which is what makes the
+ *    lock-screen controls work.
+ */
 @UnstableApi
-class MediaPlaybackService : MediaSessionService() {
+class MusicPlaybackService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
 
@@ -26,7 +49,26 @@ class MediaPlaybackService : MediaSessionService() {
     }
 
     override fun onCreate() {
+        // Must be configured before super.onCreate() returns: Media3 builds its notification
+        // manager inside that call. A dedicated channel keeps the playback controls in their
+        // own, always-enabled entry in the system's media/notification settings instead of
+        // sharing media3's generic default channel.
+        try {
+            setMediaNotificationProvider(
+                DefaultMediaNotificationProvider.Builder(this)
+                    .setChannelId(NOTIFICATION_CHANNEL_ID)
+                    .setChannelName(R.string.playback_notification_channel)
+                    .setNotificationId(NOTIFICATION_ID)
+                    .build()
+            )
+        } catch (e: Exception) {
+            // A missing notification must never take the whole app down; Media3 falls back
+            // to its default provider and the media controls still work.
+            Log.e(TAG, "Custom notification provider rejected: ${e.message}", e)
+        }
+
         super.onCreate()
+
         try {
             // A session activity is what the system's media notification opens when
             // tapped (and what OEM media controls link to). Without it the notification
@@ -154,6 +196,12 @@ class MediaPlaybackService : MediaSessionService() {
     }
 
     companion object {
-        private const val TAG = "MediaPlaybackService"
+        private const val TAG = "MusicPlaybackService"
+
+        /** Dedicated channel for the playback controls (see onCreate). */
+        private const val NOTIFICATION_CHANNEL_ID = "suziee_playback"
+
+        /** Stable notification id, so the controls update in place instead of stacking. */
+        private const val NOTIFICATION_ID = 1001
     }
 }
