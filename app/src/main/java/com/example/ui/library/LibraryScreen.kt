@@ -182,6 +182,8 @@ fun LibraryScreen(
                         }
                     },
                     onTrackClick = { t -> playerManager.playTrack(t, playlistTracks) },
+                    onPlayNext = { t -> playerManager.playNext(t) },
+                    onAddToQueue = { t -> playerManager.addToQueue(t) },
                     onRemoveTrack = { t ->
                         scope.launch {
                             playerManager.repository.removeTrackFromPlaylist(pl.id, t.id)
@@ -413,6 +415,8 @@ fun PlaylistDetailView(
     onPlayAll: () -> Unit,
     onShuffle: () -> Unit,
     onTrackClick: (Track) -> Unit,
+    onPlayNext: (Track) -> Unit,
+    onAddToQueue: (Track) -> Unit,
     onRemoveTrack: (Track) -> Unit,
     onDeletePlaylist: () -> Unit,
     onTrackOptions: (Track) -> Unit
@@ -486,8 +490,8 @@ fun PlaylistDetailView(
                     isPlaying = isPlaying,
                     onClick = { onTrackClick(track) },
                     onAddToPlaylist = { onTrackOptions(track) },
-                    onPlayNext = { playerManager.playNext(track) },
-                    onAddToQueue = { playerManager.addToQueue(track) },
+                    onPlayNext = { onPlayNext(track) },
+                    onAddToQueue = { onAddToQueue(track) },
                     onRemoveFromPlaylist = { onRemoveTrack(track) }
                 )
             }
