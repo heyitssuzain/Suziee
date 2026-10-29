@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.util.Log
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -164,6 +165,41 @@ class SuzieeMediaService : MediaSessionService() {
                 .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                 .build()
 
+        /**
+         * Media3's notification/lock-screen provider also asks the player whether a next or
+         * previous item exists. ExoPlayer only has one item loaded, so without these
+         * overrides some controllers decide the buttons are unavailable even though the
+         * commands above are advertised. The app's own queue is the source of truth.
+         */
+        override fun hasNextMediaItem(): Boolean {
+            val state = manager.playbackState.value
+            return PlaybackQueue.manualNextIndex(
+                state.currentIndex,
+                state.queue.size,
+                state.repeatMode
+            ) != null
+        }
+
+        override fun hasPreviousMediaItem(): Boolean {
+            val state = manager.playbackState.value
+            return PlaybackQueue.previousIndex(state.currentIndex, state.queue.size) != null
+        }
+
+        override fun getNextMediaItemIndex(): Int {
+            val state = manager.playbackState.value
+            return PlaybackQueue.manualNextIndex(
+                state.currentIndex,
+                state.queue.size,
+                state.repeatMode
+            ) ?: C.INDEX_UNSET
+        }
+
+        override fun getPreviousMediaItemIndex(): Int {
+            val state = manager.playbackState.value
+            return PlaybackQueue.previousIndex(state.currentIndex, state.queue.size)
+                ?: C.INDEX_UNSET
+        }
+
         override fun seekToNext() {
             Log.i(TAG, "Session command: Next")
             manager.playNext()
@@ -193,13 +229,20 @@ class SuzieeMediaService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = mediaSession?.player
-        val keepAlive = player != null && player.playWhenReady && player.mediaItemCount > 0
+        // Keep a paused or buffering item alive: that is still an active playback session,
+        // and Android should continue showing its notification/lock-screen controls. Only
+        // tear the service down when there is genuinely nothing loaded or the player is
+        // idle after a terminal error.
+        val hasActiveItem = player != null &&
+            player.mediaItemCount > 0 &&
+            player.playbackState != Player.STATE_IDLE
         Log.i(
             TAG,
-            "Task removed - keeping service alive=$keepAlive " +
-                "(playWhenReady=${player?.playWhenReady}, items=${player?.mediaItemCount})"
+            "Task removed - keeping service alive=$hasActiveItem " +
+                "(playWhenReady=${player?.playWhenReady}, items=${player?.mediaItemCount}, " +
+                "state=${player?.playbackState})"
         )
-        if (!keepAlive) {
+        if (!hasActiveItem) {
             stopSelf()
         }
     }

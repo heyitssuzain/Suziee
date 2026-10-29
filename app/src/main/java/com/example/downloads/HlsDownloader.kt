@@ -1,6 +1,7 @@
 package com.example.downloads
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -36,6 +37,8 @@ class HlsDownloader(
      * @param headers      per-stream headers (User-Agent / Referer / cookies)
      * @param targetDir    directory to write into (must exist or be creatable)
      * @param baseName     file name without extension (already sanitized by the caller)
+     * @param shouldCommit false when this attempt was cancelled/superseded while it was
+     *   still reading; checked before replacing the previous good file.
      * @param onProgress   0..100, awaited as each segment lands (so writes stay ordered)
      */
     suspend fun download(
@@ -43,6 +46,7 @@ class HlsDownloader(
         headers: Map<String, String>,
         targetDir: File,
         baseName: String,
+        shouldCommit: () -> Boolean = { true },
         onProgress: (suspend (Int) -> Unit)? = null
     ): Downloaded = withContext(Dispatchers.IO) {
         // 1. Walk master playlists down to the media playlist (bounded, in case of a loop).
@@ -74,24 +78,44 @@ class HlsDownloader(
             throw IOException("Cannot create download directory ${targetDir.absolutePath}")
         }
         val destination = File(targetDir, "$baseName.$extension")
-        if (destination.exists()) destination.delete()
+        // Unique per attempt, matching the progressive path: a cancelled job unwinding
+        // later must never delete the temp file of a fresh retry.
+        val temp = File.createTempFile("${baseName}_", PART_SUFFIX, targetDir)
 
-        // 3. Write init + every segment into a single file.
+        // 3. Write init + every segment into a single temporary file. The previous good
+        // download is replaced only after every segment has landed.
         var written = 0L
-        destination.outputStream().buffered(BUFFER_SIZE).use { output ->
-            if (initUrl != null) {
-                val init = fetchBytesWithRetry(initUrl, headers)
-                output.write(init)
-                written += init.size
+        try {
+            temp.outputStream().buffered(BUFFER_SIZE).use { output ->
+                if (initUrl != null) {
+                    val init = fetchBytesWithRetry(initUrl, headers)
+                    output.write(init)
+                    written += init.size
+                }
+
+                segmentRefs.forEachIndexed { index, ref ->
+                    val bytes = fetchBytesWithRetry(resolveUri(currentUrl, ref), headers)
+                    output.write(bytes)
+                    written += bytes.size
+                    onProgress?.invoke(((index + 1) * 100) / segmentRefs.size)
+                }
+                output.flush()
             }
 
-            segmentRefs.forEachIndexed { index, ref ->
-                val bytes = fetchBytesWithRetry(resolveUri(currentUrl, ref), headers)
-                output.write(bytes)
-                written += bytes.size
-                onProgress?.invoke(((index + 1) * 100) / segmentRefs.size)
+            if (written <= 0L) throw IOException("HLS download produced an empty file")
+            if (!shouldCommit()) {
+                throw CancellationException("HLS download was superseded")
             }
-            output.flush()
+            if (destination.exists() && !destination.delete()) {
+                throw IOException("Could not replace ${destination.name}")
+            }
+            if (!temp.renameTo(destination)) {
+                temp.copyTo(destination, overwrite = true)
+                temp.delete()
+            }
+        } catch (e: Exception) {
+            temp.delete()
+            throw e
         }
 
         Log.i(TAG, "Stitched ${segmentRefs.size} HLS segments into $extension ($written bytes)")
@@ -163,6 +187,8 @@ class HlsDownloader(
         repeat(MAX_SEGMENT_ATTEMPTS) { attempt ->
             try {
                 return fetchBytes(url, headers)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 lastError = e
                 Log.w(TAG, "Segment attempt ${attempt + 1} failed: ${e.message}")
@@ -188,6 +214,7 @@ class HlsDownloader(
         const val MAX_SEGMENT_ATTEMPTS = 3
         const val RETRY_BACKOFF_MS = 400L
         const val BUFFER_SIZE = 64 * 1024
+        const val PART_SUFFIX = ".part"
 
         val EXT_X_MAP_REGEX = Regex("#EXT-X-MAP:URI=\"([^\"]+)\"")
     }

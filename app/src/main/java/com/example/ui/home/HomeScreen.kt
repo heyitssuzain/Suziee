@@ -441,6 +441,7 @@ fun HomeScreen(
                         }
                     },
                     onAddToPlaylist = { onTrackOptions(track) },
+                    onPlayNext = { playerManager.playNext(track) },
                     onAddToQueue = { playerManager.addToQueue(track) },
                     modifier = Modifier.padding(horizontal = 12.dp)
                 )
@@ -500,6 +501,7 @@ fun HomeScreen(
                     isCurrentTrack = playbackState.currentTrack?.id == track.id,
                     isPlaying = playbackState.isPlaying,
                     onClick = { playerManager.playTrack(track, downloadedTracks) },
+                    onPlayNext = { playerManager.playNext(track) },
                     onAddToQueue = { playerManager.addToQueue(track) },
                     modifier = Modifier.padding(horizontal = 12.dp)
                 )

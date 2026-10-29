@@ -24,7 +24,6 @@ import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
 import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.remote.streaming.OnlineStreamResolver
-import com.example.data.remote.streaming.StreamSource
 import com.example.data.repository.MusicRepository
 import com.example.domain.model.StreamInfo
 import com.example.domain.model.Track
@@ -43,10 +42,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.random.Random
-
-enum class RepeatMode {
-    OFF, ALL, ONE
-}
 
 data class PlaybackState(
     val isPlaying: Boolean = false,
@@ -174,6 +169,19 @@ class MusicPlayerManager(
     /** The in-flight resolve/extraction job. Cancelled when the user picks another track. */
     private var resolveJob: Job? = null
 
+    /**
+     * Identifies the latest resolve request. A resolver call may block in OkHttp even after
+     * its coroutine is cancelled; comparing this token before handing a result to ExoPlayer
+     * keeps a late result for the old song from replacing the song the user just chose.
+     */
+    private var requestGeneration = 0L
+
+    /** True while the one bounded automatic re-resolve for the current track is running. */
+    private var recovering = false
+
+    /** ENDED is delivered again by some players/OEM controllers; advance at most once. */
+    private var lastHandledEndedMediaId: String? = null
+
     /** When the current request was made; used to log startup latency. */
     private var requestStartedAtMs = 0L
 
@@ -224,6 +232,21 @@ class MusicPlayerManager(
                         }
                     }
                     Player.STATE_ENDED -> {
+                        val mediaId = exoPlayer.currentMediaItem?.mediaId
+                        val currentId = _playbackState.value.currentTrack?.id
+                        if (!PlaybackEventPolicy.shouldHandleEnded(
+                                eventMediaId = mediaId,
+                                currentTrackId = currentId,
+                                lastHandledMediaId = lastHandledEndedMediaId
+                            )
+                        ) {
+                            Log.w(
+                                TAG,
+                                "Ignoring stale/duplicate ENDED (item=$mediaId, current=$currentId)"
+                            )
+                            return
+                        }
+                        lastHandledEndedMediaId = mediaId
                         handlePlaybackEnded()
                     }
                     Player.STATE_IDLE -> {
@@ -241,20 +264,43 @@ class MusicPlayerManager(
                     return
                 }
 
+                // Ignore an error from the media item that was already replaced. This is
+                // common when a user presses Next while the previous URL is still opening:
+                // the old source fails after the new request has started.
+                val failedMediaId = exoPlayer.currentMediaItem?.mediaId
+                if (!PlaybackEventPolicy.isForCurrentTrack(failedMediaId, track.id)) {
+                    Log.w(
+                        TAG,
+                        "Ignoring stale player error (item=$failedMediaId, current=${track.id})"
+                    )
+                    return
+                }
+
+                // A second error callback can arrive while the first recovery is still
+                // resolving. Acting on it would burn the retry budget and briefly show a
+                // false "Couldn't play" error even though the recovery is about to succeed.
+                if (recovering) {
+                    Log.i(TAG, "Player error while recovery is in progress - ignored")
+                    return
+                }
+
                 // Remember where we were, so a failover resumes mid-song instead of
                 // restarting the recording from the beginning.
                 val resumePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
 
                 // A resolved googlevideo URL can go stale mid-track (expired signature or
                 // a dropped CDN connection). Re-resolve this one track through the ladder
-                // instead of dead-ending; guarded so it can only happen once per track.
-                if (coordinator.currentSource != StreamSource.LOCAL &&
+                // instead of dead-ending; the coordinator bounds the attempts.
+                if (PlaybackFailurePolicy.isRecoverable(
+                        error.errorCode,
+                        coordinator.currentSource
+                    ) &&
                     coordinator.claimFailover()
                 ) {
                     Log.w(
                         TAG,
-                        "Stream failed mid-playback (was ${coordinator.currentSource}) - " +
-                            "re-resolving once"
+                        "Stream failed mid-playback (was ${coordinator.currentSource}, " +
+                            "code=${error.errorCode}) - re-resolving"
                     )
                     recoverWithFallback(track, resumePositionMs)
                     return
@@ -304,22 +350,20 @@ class MusicPlayerManager(
     }
 
     fun playTrack(track: Track, newQueue: List<Track> = listOf(track)) {
-        val queue = if (newQueue.none { it.id == track.id }) {
-            newQueue + track
-        } else {
-            newQueue
-        }
-        originalQueue = queue
-        val targetQueue = if (_playbackState.value.isShuffle) queue.shuffled() else queue
-        val index = targetQueue.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        val selection = PlaybackQueue.select(
+            track = track,
+            requested = newQueue,
+            shuffle = _playbackState.value.isShuffle
+        )
+        originalQueue = selection.originalQueue
 
         // Start of the user-visible latency window (used by the startup timing logs).
         requestStartedAtMs = SystemClock.elapsedRealtime()
 
         _playbackState.update {
             it.copy(
-                queue = targetQueue,
-                currentIndex = index,
+                queue = selection.queue,
+                currentIndex = selection.currentIndex,
                 currentTrack = track,
                 isLoading = true,
                 errorMessage = null,
@@ -345,9 +389,13 @@ class MusicPlayerManager(
      */
     private fun resolveAndStartPlayback(track: Track) {
         // A new selection always wins: drop whatever the previous track was doing and
-        // reset the failover guard.
+        // reset the failover guard. The generation token also rejects a result that was
+        // already blocked in the network stack when the cancel was requested.
         resolveJob?.cancel()
         coordinator.resetForNewTrack()
+        recovering = false
+        lastHandledEndedMediaId = null
+        val generation = ++requestGeneration
 
         resolveJob = scope.launch {
             try {
@@ -373,6 +421,7 @@ class MusicPlayerManager(
                     ?.takeIf { it.exists() }
 
                 if (localFile != null) {
+                    if (generation != requestGeneration) return@launch
                     Log.i(TAG, "Playing local offline track: ${localFile.absolutePath}")
                     coordinator.noteLocalSource()
                     startPlayback(StreamInfo(url = Uri.fromFile(localFile).toString()), track)
@@ -381,6 +430,10 @@ class MusicPlayerManager(
 
                 // 2. Remote: the native YouTube player API.
                 val streamInfo = coordinator.resolve(track)
+                if (generation != requestGeneration) {
+                    Log.i(TAG, "Dropping stale resolve result for '${track.title}'")
+                    return@launch
+                }
                 if (streamInfo == null) {
                     Log.e(
                         TAG,
@@ -400,6 +453,7 @@ class MusicPlayerManager(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (generation != requestGeneration) return@launch
                 Log.e(TAG, "Playback start failed: ${e.message}", e)
                 _playbackState.update {
                     it.copy(
@@ -420,12 +474,22 @@ class MusicPlayerManager(
      * the song restart from the beginning after a mid-track failure.
      */
     private fun recoverWithFallback(track: Track, resumePositionMs: Long = 0L) {
+        if (recovering) return
+        recovering = true
         resolveJob?.cancel()
+        val generation = ++requestGeneration
         resolveJob = scope.launch {
             try {
+                // Small backoff: a dropped socket or a just-expired URL is often ready on
+                // the next request, and this avoids hammering the player endpoint.
+                delay(RECOVERY_BACKOFF_MS)
                 _playbackState.update { it.copy(isLoading = true, errorMessage = null) }
 
                 val streamInfo = coordinator.resolve(track)
+                if (generation != requestGeneration) {
+                    Log.i(TAG, "Dropping stale recovery result for '${track.title}'")
+                    return@launch
+                }
                 if (streamInfo == null) {
                     _playbackState.update {
                         it.copy(
@@ -441,6 +505,7 @@ class MusicPlayerManager(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (generation != requestGeneration) return@launch
                 Log.e(TAG, "Recovery resolve failed: ${e.message}", e)
                 _playbackState.update {
                     it.copy(
@@ -449,6 +514,8 @@ class MusicPlayerManager(
                         errorMessage = unplayableMessage()
                     )
                 }
+            } finally {
+                if (generation == requestGeneration) recovering = false
             }
         }
     }
@@ -460,6 +527,9 @@ class MusicPlayerManager(
      * @param startPositionMs optional position to resume from (failover path).
      */
     private fun startPlayback(streamInfo: StreamInfo, track: Track, startPositionMs: Long = 0L) {
+        lastHandledEndedMediaId = null
+        recovering = false
+
         // Complete, immutable metadata for every surface at once: the notification panel and
         // the lock screen render title/artist/artwork from *this* object, so it is built in
         // full before the item is handed to the player. `isBrowsable = false` (the 1.5.x
@@ -505,6 +575,9 @@ class MusicPlayerManager(
             } else {
                 val state = exoPlayer.playbackState
                 if (state == Player.STATE_ENDED) {
+                    // A user replay of the finished item must be allowed to advance again
+                    // when it ends; clear the duplicate-ENDED guard.
+                    lastHandledEndedMediaId = null
                     exoPlayer.seekTo(0)
                 } else if (state == Player.STATE_IDLE && exoPlayer.mediaItemCount > 0) {
                     // The player errored or was stopped - it needs a fresh prepare().
@@ -537,6 +610,8 @@ class MusicPlayerManager(
      * Wired to the "Cancel" affordance shown while a track is buffering/resolving.
      */
     fun cancelPlayback() {
+        requestGeneration++
+        recovering = false
         try {
             resolveJob?.cancel()
         } catch (e: Exception) {
@@ -560,15 +635,48 @@ class MusicPlayerManager(
 
     fun playNext() {
         val state = _playbackState.value
-        if (state.queue.isEmpty()) return
-        val nextIndex = state.currentIndex + 1
-        when {
-            nextIndex < state.queue.size -> switchToIndex(nextIndex)
-            // Repeat ALL (or manual Next while repeat is on) wraps to the start of the queue.
-            state.repeatMode != RepeatMode.OFF -> switchToIndex(0)
-            // End of the queue with no repeat: keep the finished track loaded and idle.
-            else -> _playbackState.update { it.copy(isPlaying = false) }
+        val nextIndex = PlaybackQueue.manualNextIndex(
+            currentIndex = state.currentIndex,
+            queueSize = state.queue.size,
+            repeatMode = state.repeatMode
+        )
+        if (nextIndex != null) {
+            switchToIndex(nextIndex)
+        } else {
+            // End of the queue without repeat: keep the finished track loaded and idle.
+            _playbackState.update { it.copy(isPlaying = false) }
         }
+    }
+
+    /**
+     * Inserts [track] directly after the currently playing item. The cursor is not moved,
+     * so the inserted song starts only when its turn arrives.
+     */
+    fun playNext(track: Track) {
+        val state = _playbackState.value
+        val currentId = state.currentTrack?.id
+        if (currentId == null || state.queue.isEmpty()) {
+            playTrack(track)
+            return
+        }
+
+        val updatedQueue = PlaybackQueue.insertNext(state.queue, state.currentIndex, track)
+        originalQueue = if (state.isShuffle) {
+            val originalIndex = originalQueue.indexOfFirst { it.id == currentId }
+            if (originalIndex >= 0) {
+                PlaybackQueue.insertNext(originalQueue, originalIndex, track)
+            } else {
+                originalQueue + track
+            }
+        } else {
+            updatedQueue
+        }
+        _playbackState.update { it.copy(queue = updatedQueue) }
+        Log.i(
+            TAG,
+            "Queued '${track.title}' next after '${state.currentTrack.title}' " +
+                "(position ${state.currentIndex + 1})"
+        )
     }
 
     fun playPrevious() {
@@ -579,8 +687,8 @@ class MusicPlayerManager(
             exoPlayer.seekTo(0)
             return
         }
-        val prevIndex = state.currentIndex - 1
-        if (prevIndex >= 0) {
+        val prevIndex = PlaybackQueue.previousIndex(state.currentIndex, state.queue.size)
+        if (prevIndex != null) {
             switchToIndex(prevIndex)
         } else {
             exoPlayer.seekTo(0)
@@ -588,6 +696,9 @@ class MusicPlayerManager(
     }
 
     fun seekTo(positionMs: Long) {
+        if (exoPlayer.playbackState == Player.STATE_ENDED) {
+            lastHandledEndedMediaId = null
+        }
         exoPlayer.seekTo(positionMs)
         _playbackState.update { it.copy(currentPositionMs = positionMs) }
     }
@@ -596,18 +707,15 @@ class MusicPlayerManager(
         val currentShuffle = !_playbackState.value.isShuffle
         val currentTrack = _playbackState.value.currentTrack
         val newQueue = if (currentShuffle) {
-            val shuffled = originalQueue.toMutableList()
-            if (currentTrack != null) {
-                shuffled.remove(currentTrack)
-                shuffled.shuffle()
-                listOf(currentTrack) + shuffled
-            } else {
-                shuffled.shuffled()
-            }
+            PlaybackQueue.shuffledWithCurrentFirst(originalQueue, currentTrack)
         } else {
             originalQueue
         }
-        val newIndex = if (currentTrack != null) newQueue.indexOfFirst { it.id == currentTrack.id } else 0
+        val newIndex = if (currentTrack != null) {
+            newQueue.indexOfFirst { it.id == currentTrack.id }
+        } else {
+            0
+        }
         _playbackState.update {
             it.copy(
                 isShuffle = currentShuffle,
@@ -643,20 +751,29 @@ class MusicPlayerManager(
     }
 
     fun removeFromQueue(trackId: String) {
-        val currentQueue = _playbackState.value.queue.toMutableList()
+        val state = _playbackState.value
+        val currentQueue = state.queue.toMutableList()
         val removeIndex = currentQueue.indexOfFirst { it.id == trackId }
-        if (removeIndex != -1) {
-            currentQueue.removeAt(removeIndex)
-            val newIndex = if (removeIndex < _playbackState.value.currentIndex) {
-                _playbackState.value.currentIndex - 1
-            } else {
-                _playbackState.value.currentIndex
-            }
-            _playbackState.update { it.copy(queue = currentQueue, currentIndex = newIndex) }
+        if (removeIndex == -1) return
+
+        currentQueue.removeAt(removeIndex)
+        val originalIndex = originalQueue.indexOfFirst { it.id == trackId }
+        if (originalIndex >= 0) {
+            originalQueue = originalQueue.toMutableList().apply { removeAt(originalIndex) }
         }
+        val newIndex = when {
+            currentQueue.isEmpty() -> -1
+            removeIndex < state.currentIndex -> state.currentIndex - 1
+            removeIndex == state.currentIndex -> state.currentIndex - 1
+            else -> state.currentIndex
+        }
+        _playbackState.update { it.copy(queue = currentQueue, currentIndex = newIndex) }
     }
 
     fun clearQueue() {
+        requestGeneration++
+        recovering = false
+        lastHandledEndedMediaId = null
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
         originalQueue = emptyList()
@@ -678,6 +795,7 @@ class MusicPlayerManager(
         // Repeat ONE: replay the current track. ExoPlayer's own repeat is OFF, so this is
         // the only place it can happen.
         if (state.repeatMode == RepeatMode.ONE) {
+            lastHandledEndedMediaId = null
             exoPlayer.seekTo(0)
             exoPlayer.playWhenReady = true
             return
@@ -690,14 +808,18 @@ class MusicPlayerManager(
             return
         }
 
-        // End of the queue without repeat: stop cleanly instead of looping or erroring.
-        if (state.currentIndex >= state.queue.lastIndex && state.repeatMode != RepeatMode.ALL) {
+        val nextIndex = PlaybackQueue.autoAdvanceIndex(
+            currentIndex = state.currentIndex,
+            queueSize = state.queue.size,
+            repeatMode = state.repeatMode
+        )
+        if (nextIndex == null) {
             Log.i(TAG, "Playlist finished")
             _playbackState.update { it.copy(isPlaying = false) }
             return
         }
 
-        playNext()
+        switchToIndex(nextIndex)
     }
 
     private fun startProgressTracker() {
@@ -748,5 +870,8 @@ class MusicPlayerManager(
 
         /** Step used by the notification's seek-back / seek-forward buttons. */
         private const val SEEK_INCREMENT_MS = 10_000L
+
+        /** Small delay before re-resolving a failed stream, to avoid hammering the API. */
+        private const val RECOVERY_BACKOFF_MS = 350L
     }
 }

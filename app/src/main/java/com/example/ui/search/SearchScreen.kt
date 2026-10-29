@@ -319,6 +319,7 @@ fun SearchScreen(
                                     }
                                 },
                                 onAddToPlaylist = { onTrackOptions(track) },
+                                onPlayNext = { playerManager.playNext(track) },
                                 onAddToQueue = { playerManager.addToQueue(track) },
                                 onDownload = { onDownloadTrack(track) }
                             )

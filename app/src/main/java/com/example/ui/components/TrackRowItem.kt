@@ -61,6 +61,7 @@ fun TrackRowItem(
     onClick: () -> Unit,
     onFavoriteToggle: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
+    onPlayNext: (() -> Unit)? = null,
     onAddToQueue: (() -> Unit)? = null,
     onDownload: (() -> Unit)? = null,
     /**
@@ -216,10 +217,20 @@ fun TrackRowItem(
                 expanded = showMenu,
                 onDismissRequest = { showMenu = false }
             ) {
-                if (onAddToQueue != null) {
+                if (onPlayNext != null) {
                     DropdownMenuItem(
                         text = { Text("Play Next") },
                         leadingIcon = { Icon(Icons.Default.QueueMusic, contentDescription = null) },
+                        onClick = {
+                            showMenu = false
+                            onPlayNext()
+                        }
+                    )
+                }
+                if (onAddToQueue != null) {
+                    DropdownMenuItem(
+                        text = { Text("Add to Queue") },
+                        leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
                         onClick = {
                             showMenu = false
                             onAddToQueue()

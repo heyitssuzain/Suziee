@@ -27,6 +27,9 @@ interface TrackDao {
     @Query("SELECT * FROM tracks WHERE isDownloaded = 1 ORDER BY lastAccessedAt DESC")
     fun getDownloadedTracks(): Flow<List<TrackEntity>>
 
+    @Query("SELECT * FROM tracks WHERE isDownloaded = 1 ORDER BY lastAccessedAt DESC")
+    suspend fun getDownloadedTrackEntities(): List<TrackEntity>
+
     @Query("UPDATE tracks SET isDownloaded = :isDownloaded, localFilePath = :localPath WHERE id = :trackId")
     suspend fun updateDownloadStatus(trackId: String, isDownloaded: Boolean, localPath: String?)
 
@@ -110,6 +113,9 @@ interface DownloadDao {
 
     @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
     fun getAllDownloads(): Flow<List<DownloadEntity>>
+
+    @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
+    suspend fun getAllDownloadsOnce(): List<DownloadEntity>
 
     @Query("SELECT * FROM downloads WHERE trackId = :trackId LIMIT 1")
     suspend fun getDownload(trackId: String): DownloadEntity?

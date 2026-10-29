@@ -291,6 +291,7 @@ fun LibraryScreen(
                                             scope.launch { playerManager.repository.toggleFavorite(track) }
                                         },
                                         onAddToPlaylist = { onTrackOptions(track) },
+                                        onPlayNext = { playerManager.playNext(track) },
                                         onAddToQueue = { playerManager.addToQueue(track) },
                                         onDownload = { onDownloadTrack(track) }
                                     )
@@ -336,6 +337,7 @@ fun LibraryScreen(
                                         isPlaying = playbackState.isPlaying,
                                         onClick = { playerManager.playTrack(track, history) },
                                         onAddToPlaylist = { onTrackOptions(track) },
+                                        onPlayNext = { playerManager.playNext(track) },
                                         onAddToQueue = { playerManager.addToQueue(track) },
                                         onDownload = { onDownloadTrack(track) }
                                     )
@@ -484,6 +486,8 @@ fun PlaylistDetailView(
                     isPlaying = isPlaying,
                     onClick = { onTrackClick(track) },
                     onAddToPlaylist = { onTrackOptions(track) },
+                    onPlayNext = { playerManager.playNext(track) },
+                    onAddToQueue = { playerManager.addToQueue(track) },
                     onRemoveFromPlaylist = { onRemoveTrack(track) }
                 )
             }

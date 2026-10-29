@@ -1,6 +1,8 @@
 package com.example.data.repository
 
+import androidx.room.withTransaction
 import com.example.data.local.SuzieeDatabase
+import com.example.data.local.TrackMetadataMerge
 import com.example.data.local.entities.FavoriteEntity
 import com.example.data.local.entities.HistoryEntity
 import com.example.data.local.entities.PlaylistEntity
@@ -31,8 +33,11 @@ class MusicRepository(
         val result = innerTubeApi.search(query)
         if (result.isSuccess) {
             val tracks = result.getOrNull().orEmpty()
-            // Save search results to DB for offline / caching
-            trackDao.insertTracks(tracks.map { TrackEntity.fromDomain(it) })
+            // Save search results for offline / caching. This is a metadata refresh, so it
+            // must preserve an existing download flag/path and cached lyrics.
+            database.withTransaction {
+                tracks.forEach { upsertMetadataInTransaction(it) }
+            }
             return Result.success(tracks)
         }
         return result
@@ -67,7 +72,7 @@ class MusicRepository(
 
     suspend fun toggleFavorite(track: Track) {
         val fav = favoriteDao.isFavorite(track.id).first()
-        trackDao.insertTrack(TrackEntity.fromDomain(track))
+        upsertMetadata(track)
         if (fav) {
             favoriteDao.removeFavorite(track.id)
         } else {
@@ -103,7 +108,7 @@ class MusicRepository(
     }
 
     suspend fun addTrackToPlaylist(playlistId: String, track: Track) {
-        trackDao.insertTrack(TrackEntity.fromDomain(track))
+        upsertMetadata(track)
         playlistDao.insertTrackToPlaylist(
             PlaylistTrackCrossRef(playlistId = playlistId, trackId = track.id)
         )
@@ -120,7 +125,7 @@ class MusicRepository(
 
     // History
     suspend fun recordPlayed(track: Track) {
-        trackDao.insertTrack(TrackEntity.fromDomain(track))
+        upsertMetadata(track)
         historyDao.insertHistory(HistoryEntity(trackId = track.id))
     }
 
@@ -137,12 +142,40 @@ class MusicRepository(
     fun getDownloadedTracks(): Flow<List<Track>> =
         trackDao.getDownloadedTracks().map { list -> list.map { it.toDomain() } }
 
+    /** Saves a track row without changing its existing download state (see [upsertMetadata]). */
+    suspend fun rememberTrack(track: Track) {
+        upsertMetadata(track)
+    }
+
     suspend fun markTrackDownloaded(trackId: String, localPath: String) {
         trackDao.updateDownloadStatus(trackId, isDownloaded = true, localPath = localPath)
+    }
+
+    /**
+     * A completed file disappeared. Keep the track metadata, but stop claiming it is
+     * downloadable offline; the Downloads screen keeps the row and offers Retry.
+     */
+    suspend fun markTrackDownloadMissing(trackId: String) {
+        trackDao.updateDownloadStatus(trackId, isDownloaded = false, localPath = null)
     }
 
     suspend fun removeDownloadedTrack(trackId: String) {
         trackDao.updateDownloadStatus(trackId, isDownloaded = false, localPath = null)
         downloadDao.deleteDownload(trackId)
+    }
+
+    /**
+     * Metadata-only upsert. REPLACE would delete the whole row first, which is how search
+     * results and history writes used to erase `isDownloaded`/`localFilePath`. Preserve
+     * those fields explicitly and leave download rows (and files) untouched.
+     */
+    private suspend fun upsertMetadata(track: Track) = database.withTransaction {
+        upsertMetadataInTransaction(track)
+    }
+
+    private suspend fun upsertMetadataInTransaction(track: Track) {
+        val incoming = TrackEntity.fromDomain(track)
+        val existing = trackDao.getTrackById(track.id)
+        trackDao.insertTrack(TrackMetadataMerge.merge(existing, incoming))
     }
 }

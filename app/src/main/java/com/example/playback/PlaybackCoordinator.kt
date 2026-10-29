@@ -29,13 +29,13 @@ internal class PlaybackCoordinator(
     var currentSource: StreamSource = StreamSource.NONE
         private set
 
-    /** Guards the one automatic re-resolve after a mid-playback error. */
-    private var failoverUsed = false
+    /** Counts automatic re-resolves after mid-playback errors (bounded by policy). */
+    private var failoverAttempts = 0
 
     /** Resets every per-track guard. Called when a new track (or a manual retry) starts. */
     fun resetForNewTrack() {
         currentSource = StreamSource.NONE
-        failoverUsed = false
+        failoverAttempts = 0
     }
 
     /** The stream came from an already-downloaded local file; no remote resolution happened. */
@@ -44,12 +44,13 @@ internal class PlaybackCoordinator(
     }
 
     /**
-     * Claims the single "this remote stream died, re-resolve it once" attempt.
-     * Returns false once it has already been used for this track.
+     * Claims one "this remote stream died, re-resolve it" attempt.
+     * Returns false once [PlaybackFailurePolicy.MAX_AUTOMATIC_RECOVERIES] is exhausted for
+     * this track, or immediately while already recovering (checked by the caller).
      */
     fun claimFailover(): Boolean {
-        if (failoverUsed) return false
-        failoverUsed = true
+        if (!PlaybackFailurePolicy.canRecover(failoverAttempts)) return false
+        failoverAttempts++
         return true
     }
 
