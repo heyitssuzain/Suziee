@@ -3,16 +3,95 @@
 Date: 19 Oct 2026 · Base: `v1.2-build-21` · Scope: smallest safe changes, no feature removals,
 no data loss, no identity/signing change.
 
-Nine fix passes are recorded here. **Pass 9 (below) is the current, authoritative one**: the
-on-device 403 was googlevideo's new range/PO-token gate on the Android-VR URLs, and build 32
-switches to the ANDROID/IOS clients with the `params=2AMB` testsuite flag, which returns
-ordinary full-length audio URLs. Pass 8 removed yt-dlp and the headless WebView and replaced
+Ten fix passes are recorded here. **Pass 10 (below) is the current, authoritative one**:
+queue advance, Play Next, notification/lock-screen controls and offline-download persistence
+were repaired in build 35. Pass 9 identified the on-device 403 as googlevideo's new
+range/PO-token gate on the Android-VR URLs; build 32 switched to the ANDROID/IOS clients with
+the `params=2AMB` testsuite flag, which returns ordinary full-length audio URLs. Pass 8
+removed yt-dlp and the headless WebView and replaced
 both with a native YouTube player-API client. Pass 7 fixed the "every song fails" regression
 in build 29 by removing an IPv6 stall that made yt-dlp miss its deadline; pass 6 introduced
 the yt-dlp engine; pass 5 tightened identity verification; pass 4 replaced the primary
 extraction source with the pre-warmed headless engine; pass 3 is kept for its evidence
 trail: pass 2 had made official songs *stop playing entirely*, and pass 3 removed that
 regression instead of adding another layer of tightening.
+
+---
+
+# PASS 10 - queue advance, Play Next, notification controls and offline persistence (build 35)
+
+## Reported defects
+
+* Playlist playback stopped after one or two songs, or repeated the same song.
+* The overflow-menu action labelled **Play Next** appended to the queue instead of playing next.
+* Notification and lock-screen next/previous buttons did not control the app queue.
+* Playback could be interrupted by a stale callback from the previous track.
+* A saved song could disappear from the library even though its audio file was still on disk.
+* A failed or cancelled retry could delete a previously completed download.
+
+## Root causes
+
+1. **Queue state lived in several ad-hoc indices.** Auto-advance, manual Next, repeat and
+   Play Next each calculated their own position. A stale `STATE_ENDED` callback could also
+   advance twice, and removing the current queue item left a stale cursor.
+2. **Play Next called `addToQueue`.** The menu label and the implementation did not match,
+   so every "next" track landed at the end.
+3. **One ExoPlayer media item + no queue commands.** Media3 correctly reported no next or
+   previous media item, so the notification and lock screen hid/broke those controls.
+4. **Metadata `REPLACE` erased download fields.** Search, history, favourite and playlist
+   writes constructed a fresh `TrackEntity` with `isDownloaded=false` / `localFilePath=null`
+   and inserted it with SQLite `REPLACE`, while the download row and file still existed.
+5. **Download cleanup was too broad.** Cleanup deleted every file whose name started with
+   the track id, including a completed file, and a cancelled blocking job could delete a
+   newer retry's partial file.
+
+## Fixes
+
+* Added pure `PlaybackQueue` rules for selection, auto-advance, manual next/previous,
+  repeat and Play Next insertion. `MusicPlayerManager` now uses one queue cursor.
+* Added `PlaybackEventPolicy` stale/duplicate callback guards and
+  `PlaybackFailurePolicy` bounded transient recovery (2 attempts, no decode/parse retries).
+* Play Next inserts immediately after the current item without moving the cursor; Add to
+  Queue remains a separate append action. Search, Home, Library and Playlist detail all wire
+  the correct action.
+* Added a `QueuePlayer` wrapper in `SuzieeMediaService` that advertises and implements
+  next/previous commands against the app queue, and keeps paused/buffering sessions alive
+  after task removal.
+* Metadata upserts now merge through `TrackMetadataMerge`, preserving `isDownloaded`,
+  `localFilePath` and cached lyrics.
+* Progressive and HLS downloads write unique `.part` files, validate non-empty/full-length
+  content, and only replace the previous file after validation. Cancelling invalidates the
+  job token so a late blocking read cannot commit over a newer retry.
+* Startup reconciliation restores a completed file's track flag, turns interrupted rows into
+  visible FAILED/Retry rows, and only explicit user deletion removes a completed file/row.
+
+## Automated verification (CI run #35, commit `5982064`) - green
+
+`Build APK` and `Run unit tests` both succeeded: **48 tests, 0 failures**, including the new
+queue, recovery, notification-manifest, metadata-preservation and file-validation tests.
+Published release **`v1.2-build-35`**, `Suziee.apk` **23,851,675 bytes** (16,384 bytes
+larger than build 32; the new tests and small helpers add no dependency), signed with the
+private release key:
+
+* https://github.com/heyitssuzain/Suziee/releases/download/v1.2-build-35/Suziee.apk
+* Stable latest URL: https://github.com/heyitssuzain/Suziee/releases/latest/download/Suziee.apk
+
+The 48 tests were: 10 `PlaybackQueueTest`, 5 `PlaybackRecoveryPolicyTest`, 2
+`MediaNotificationManifestTest`, 2 `DownloadFilePolicyTest`, 3 `TrackMetadataMergeTest`,
+11 `YouTubeAudioPolicyTest`, 7 `VoiceCommandParserTest`, 6 `SearchRankingTest`, and 2
+existing smoke tests.
+
+## Honest limits
+
+* **No Android device is available locally.** The build, unit tests and release asset are
+  verified, but audible playback, real notification/lock-screen rendering, Bluetooth
+  controls, queue progression on an OEM device and download persistence across a reboot
+  still need a phone test.
+* The notification test checks the merged manifest contract (media-playback foreground
+  service, exported session service, notification/foreground permissions); it cannot prove
+  how a specific OEM skin renders the notification.
+* Automatic recovery is deliberately bounded and only retries transient/source errors;
+  parse/decode/unsupported-format failures still fail honestly.
 
 ---
 
