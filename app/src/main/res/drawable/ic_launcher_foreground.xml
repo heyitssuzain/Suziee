@@ -1,62 +1,103 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground: a clean, Apple-minimal headphone mark (band + two ear
+     cups) in white clay, centered inside the 66dp adaptive safe zone. Depth comes from
+     a translucent purple drop shadow offset downward. Fits the 108 viewport with the
+     glyph spanning roughly x18 - x90, y28 - y84. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Cassette shell -->
-    <path
-        android:fillColor="#FFF2E5D0"
-        android:pathData="M30,36h48a6,6 0 0 1 6,6v24a6,6 0 0 1 -6,6h-48a6,6 0 0 1 -6,-6v-24a6,6 0 0 1 6,-6z" />
+    <!-- Soft clay drop shadow -->
+    <group
+        android:translateX="0"
+        android:translateY="3.1">
+        <path
+            android:pathData="M37,54 A17,17 0 0 1 71,54"
+            android:strokeColor="#FF7A5AD0"
+            android:strokeAlpha="0.32"
+            android:strokeWidth="7.2"
+            android:strokeLineCap="round" />
+        <path
+            android:fillColor="#FF7A5AD0"
+            android:fillAlpha="0.32"
+            android:pathData="M43.75,59.75 v7.5 a6.75,6.75 0 0 1 -13.5,0 v-7.5 a6.75,6.75 0 0 1 13.5,0 z" />
+        <path
+            android:fillColor="#FF7A5AD0"
+            android:fillAlpha="0.32"
+            android:pathData="M77.75,59.75 v7.5 a6.75,6.75 0 0 1 -13.5,0 v-7.5 a6.75,6.75 0 0 1 13.5,0 z" />
+    </group>
 
-    <!-- Top label rule -->
+    <!-- Headband -->
     <path
-        android:fillColor="#FFD8A24A"
-        android:pathData="M32,41h44v2h-44z" />
+        android:pathData="M37,54 A17,17 0 0 1 71,54"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="7.2"
+        android:strokeLineCap="round" />
 
-    <!-- Tape window -->
+    <!-- Headband specular highlight -->
     <path
-        android:fillColor="#FF123B36"
-        android:pathData="M36,46h36a3,3 0 0 1 3,3v12a3,3 0 0 1 -3,3h-36a3,3 0 0 1 -3,-3v-12a3,3 0 0 1 3,-3z" />
+        android:pathData="M41,50.2 A13,13 0 0 1 67,50.2"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeAlpha="0.9"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round" />
 
-    <!-- Reels -->
-    <path
-        android:fillColor="#FFF2E5D0"
-        android:pathData="M45,49.5a5.5,5.5 0 1 0 0,11a5.5,5.5 0 1 0 0,-11z" />
-    <path
-        android:fillColor="#FF123B36"
-        android:pathData="M45,53.5a1.5,1.5 0 1 0 0,3a1.5,1.5 0 1 0 0,-3z" />
-    <path
-        android:fillColor="#FFD8A24A"
-        android:pathData="M45,54.6a0.4,0.4 0 1 0 0,0.8a0.4,0.4 0 1 0 0,-0.8z" />
+    <!-- Left ear cup -->
+    <path android:pathData="M43.75,59.75 v7.5 a6.75,6.75 0 0 1 -13.5,0 v-7.5 a6.75,6.75 0 0 1 13.5,0 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="37"
+                android:startY="53"
+                android:endX="37"
+                android:endY="74"
+                android:type="linear">
+                <item
+                    android:offset="0"
+                    android:color="#FFFFFFFF" />
+                <item
+                    android:offset="1"
+                    android:color="#FFE7D8FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
 
-    <path
-        android:fillColor="#FFF2E5D0"
-        android:pathData="M63,49.5a5.5,5.5 0 1 0 0,11a5.5,5.5 0 1 0 0,-11z" />
-    <path
-        android:fillColor="#FF123B36"
-        android:pathData="M63,53.5a1.5,1.5 0 1 0 0,3a1.5,1.5 0 1 0 0,-3z" />
-    <path
-        android:fillColor="#FFD8A24A"
-        android:pathData="M63,54.6a0.4,0.4 0 1 0 0,0.8a0.4,0.4 0 1 0 0,-0.8z" />
+    <!-- Right ear cup -->
+    <path android:pathData="M77.75,59.75 v7.5 a6.75,6.75 0 0 1 -13.5,0 v-7.5 a6.75,6.75 0 0 1 13.5,0 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="71"
+                android:startY="53"
+                android:endX="71"
+                android:endY="74"
+                android:type="linear">
+                <item
+                    android:offset="0"
+                    android:color="#FFFFFFFF" />
+                <item
+                    android:offset="1"
+                    android:color="#FFE7D8FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
 
-    <!-- Bottom seam -->
+    <!-- Inner wells -->
     <path
-        android:fillColor="#FF5B2A2A"
-        android:pathData="M32,65h44v1.2h-44z" />
+        android:fillColor="#FFCDB6F8"
+        android:pathData="M40.7,60.5 v6 a3.7,3.7 0 0 1 -7.4,0 v-6 a3.7,3.7 0 0 1 7.4,0 z" />
+    <path
+        android:fillColor="#FFCDB6F8"
+        android:pathData="M74.7,60.5 v6 a3.7,3.7 0 0 1 -7.4,0 v-6 a3.7,3.7 0 0 1 7.4,0 z" />
 
-    <!-- Screws -->
+    <!-- Cup speculars -->
     <path
-        android:fillColor="#FFD8A24A"
-        android:pathData="M28,37.9a1.1,1.1 0 1 0 0,2.2a1.1,1.1 0 1 0 0,-2.2z" />
+        android:fillColor="#FFFFFFFF"
+        android:fillAlpha="0.9"
+        android:pathData="M31,57 a3.6,2.3 0 1 0 7.2,0 a3.6,2.3 0 1 0 -7.2,0 z" />
     <path
-        android:fillColor="#FF5B2A2A"
-        android:pathData="M28,38.6a0.4,0.4 0 1 0 0,0.8a0.4,0.4 0 1 0 0,-0.8z" />
-    <path
-        android:fillColor="#FFD8A24A"
-        android:pathData="M80,37.9a1.1,1.1 0 1 0 0,2.2a1.1,1.1 0 1 0 0,-2.2z" />
-    <path
-        android:fillColor="#FF5B2A2A"
-        android:pathData="M80,38.6a0.4,0.4 0 1 0 0,0.8a0.4,0.4 0 1 0 0,-0.8z" />
+        android:fillColor="#FFFFFFFF"
+        android:fillAlpha="0.9"
+        android:pathData="M65,57 a3.6,2.3 0 1 0 7.2,0 a3.6,2.3 0 1 0 -7.2,0 z" />
 </vector>

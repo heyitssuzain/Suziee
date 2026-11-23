@@ -1,12 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon monochrome: the headphone silhouette as a single tintable mark. The
+     system applies one colour from the user's theme, so only the shapes matter. Ear-cup
+     wells are punched out with an evenOdd fill so the mark reads as headphones. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
+    <!-- Headband -->
+    <path
+        android:pathData="M37,54 A17,17 0 0 1 71,54"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="7.2"
+        android:strokeLineCap="round" />
+
+    <!-- Ear cups with wells punched out -->
     <path
         android:fillColor="#FFFFFFFF"
         android:fillType="evenOdd"
-        android:pathData="M30,36h48a6,6 0 0 1 6,6v24a6,6 0 0 1 -6,6h-48a6,6 0 0 1 -6,-6v-24a6,6 0 0 1 6,-6zM45,49.5a5.5,5.5 0 1 0 0,11a5.5,5.5 0 1 0 0,-11zM63,49.5a5.5,5.5 0 1 0 0,11a5.5,5.5 0 1 0 0,-11z" />
+        android:pathData="M43.75,59.75 v7.5 a6.75,6.75 0 0 1 -13.5,0 v-7.5 a6.75,6.75 0 0 1 13.5,0 z M40.7,60.5 v6 a3.7,3.7 0 0 1 -7.4,0 v-6 a3.7,3.7 0 0 1 7.4,0 z M77.75,59.75 v7.5 a6.75,6.75 0 0 1 -13.5,0 v-7.5 a6.75,6.75 0 0 1 13.5,0 z M74.7,60.5 v6 a3.7,3.7 0 0 1 -7.4,0 v-6 a3.7,3.7 0 0 1 7.4,0 z" />
 </vector>

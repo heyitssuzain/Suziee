@@ -122,8 +122,11 @@ fun MikasaHeroArtwork(
                     cameraDistance = 18f * density
                 },
             contentScale = ContentScale.Crop,
-            // Keep the face in frame on tall cards and wide tablets alike.
-            alignment = BiasAlignment(0.5f, 0.30f)
+            // The source portrait is 384x683 (0.562 aspect) while the hero card is wider
+            // than it is tall, so Crop would discard the top of the frame -- exactly where
+            // the face sits. A negative vertical bias pins the visible window to the top of
+            // the source, keeping the head and eyes in frame on every screen width.
+            alignment = BiasAlignment(0.5f, -0.70f)
         )
 
         // Cinematic grade: cool top wash, dark base for the copy, and an accent bloom.
@@ -133,9 +136,10 @@ fun MikasaHeroArtwork(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            colors.bgPrimary.copy(alpha = 0.42f),
+                            // A soft top wash only -- kept light so the face reads through it.
+                            colors.bgPrimary.copy(alpha = 0.16f),
                             Color.Transparent,
-                            colors.bgPrimary.copy(alpha = 0.35f),
+                            colors.bgPrimary.copy(alpha = 0.40f),
                             colors.bgPrimary.copy(alpha = 0.96f)
                         )
                     )

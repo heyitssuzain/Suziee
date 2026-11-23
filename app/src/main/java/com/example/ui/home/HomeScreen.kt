@@ -1,5 +1,7 @@
 package com.example.ui.home
 
+import com.example.ui.theme.SectionHeader
+import com.example.ui.theme.SuzieeTagChip
 import com.example.ui.theme.SuzieeTheme
 
 import androidx.compose.foundation.Image
@@ -73,7 +75,6 @@ import com.example.R
 import com.example.domain.model.Track
 import com.example.playback.MusicPlayerManager
 import com.example.ui.components.TrackRowItem
-import com.example.ui.components.WaveformVisualizer
 import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.ThemedCard
 import com.example.ui.theme.bouncyClickable
@@ -193,120 +194,29 @@ fun HomeScreen(
             }
         }
 
-        // 2. Cinematic Hero Panel
+        // 2. Hero: the cinematic Mikasa panel is exclusive to Aurora Glass. The other two themes
+        // get an interactive trending-anime showcase, so each home page reads as its own experience.
         item {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                    .clip(RoundedCornerShape(28.dp))
-                    .testTag("home_hero_panel"),
-                color = SuzieeTheme.colors.surfaceCard,
-                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border)
-            ) {
-                // The portrait breathes, floats and slowly pans while music-note particles
-                // drift across it. The copy below stays a normal Compose column for contrast.
-                Box(modifier = Modifier.fillMaxWidth().height(340.dp)) {
-                    MikasaHeroArtwork(
-                        modifier = Modifier.fillMaxSize(),
-                        reducedMotion = reducedMotion,
-                        isPlaying = playbackState.isPlaying,
-                        cornerRadius = 0
-                    )
-
-                    // Live badge
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = Color.Black.copy(alpha = 0.35f),
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(14.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(if (playbackState.isPlaying) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textMuted)
-                            )
-                            Text(
-                                text = if (playbackState.isPlaying) "NOW PLAYING" else "SUZIEE ORIGINAL",
-                                color = SuzieeTheme.colors.highlight,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.5.sp,
-                                modifier = Modifier.padding(start = 6.dp)
-                            )
-                        }
-                    }
-
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(20.dp)
-                    ) {
-                        Text(
-                            text = "IMMERSIVE ANIME SOUND",
-                            color = SuzieeTheme.colors.accentSecondary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 2.sp
-                        )
-                        Text(
-                            text = "Explore Trending Anime & J-Music",
-                            color = SuzieeTheme.colors.textPrimary,
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Button(
-                                onClick = { onNavigateToSearch("Anime Opening") },
-                                colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary),
-                                shape = RoundedCornerShape(22.dp),
-                                modifier = Modifier.testTag("hero_explore_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    tint = SuzieeTheme.colors.bgPrimary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Text(
-                                    text = "Discover Hits",
-                                    color = SuzieeTheme.colors.bgPrimary,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.padding(start = 4.dp)
-                                )
-                            }
-
-                            WaveformVisualizer(
-                                amplitudes = playbackState.visualizerAmplitudes,
-                                isPlaying = playbackState.isPlaying,
-                                height = 30.dp,
-                                modifier = Modifier.width(110.dp)
-                            )
-                        }
-                    }
-                }
+            if (SuzieeTheme.colors.isGlass) {
+                AuroraHeroPanel(
+                    playbackState = playbackState,
+                    reducedMotion = reducedMotion,
+                    onDiscover = { onNavigateToSearch("Anime Opening") }
+                )
+            } else {
+                AnimeTrendingShowcase(
+                    playerManager = playerManager,
+                    onOpenFullSearch = onNavigateToSearch,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
             }
         }
 
         // 2b. Bento shortcuts: the four things a listener reaches for most.
         item {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                Text(
-                    text = "YOUR SUZIEE",
-                    color = SuzieeTheme.colors.textSecondary,
-                    style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.5.sp),
+                SectionHeader(
+                    title = "Your Suziee",
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -352,12 +262,12 @@ fun HomeScreen(
         // 3. Quick Popular Searches (Chips)
         item {
             Column(modifier = Modifier.padding(vertical = 12.dp)) {
-                Text(
-                    text = "POPULAR DISCOVERY",
-                    color = SuzieeTheme.colors.textSecondary,
-                    style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.5.sp),
+                SectionHeader(
+                    title = "Popular Discovery",
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
                 )
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Row(
                     modifier = Modifier
@@ -367,23 +277,10 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     popularSearchTags.forEach { tag ->
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = SuzieeTheme.colors.accentPrimary.copy(alpha = 0.13f),
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                SuzieeTheme.colors.accentSecondary.copy(alpha = 0.45f)
-                            ),
-                            modifier = Modifier.clickable { onNavigateToSearch(tag) }
-                        ) {
-                            Text(
-                                text = tag,
-                                color = SuzieeTheme.colors.textPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 15.dp, vertical = 8.dp)
-                            )
-                        }
+                        SuzieeTagChip(
+                            text = tag,
+                            onClick = { onNavigateToSearch(tag) }
+                        )
                     }
                 }
             }
@@ -435,19 +332,10 @@ fun HomeScreen(
         // 4. Recently Played / Continue Listening
         if (recentlyPlayed.isNotEmpty()) {
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Recently Played",
-                        color = SuzieeTheme.colors.textPrimary,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
+                SectionHeader(
+                    title = "Recently Played",
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                )
             }
 
             items(recentlyPlayed.take(5)) { track ->
@@ -508,10 +396,8 @@ fun HomeScreen(
         if (downloadedTracks.isNotEmpty()) {
             item {
                 Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Downloaded Music (${downloadedTracks.size})",
-                    color = SuzieeTheme.colors.textPrimary,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                SectionHeader(
+                    title = "Downloaded Music (${downloadedTracks.size})",
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
                 )
             }
@@ -641,34 +527,25 @@ private fun DiscoveryRail(
     }
 
     Column(modifier = modifier.padding(vertical = 10.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    color = SuzieeTheme.colors.textPrimary,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Text(text = subtitle, color = SuzieeTheme.colors.textMuted, fontSize = 12.sp)
+        SectionHeader(
+            title = title,
+            subtitle = subtitle,
+            modifier = Modifier.padding(horizontal = 20.dp),
+            trailing = {
+                if (state is DiscoveryState.Ready) {
+                    Text(
+                        text = "See all",
+                        color = SuzieeTheme.colors.accentSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onOpenFullSearch(query) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
             }
-            if (state is DiscoveryState.Ready) {
-                Text(
-                    text = "See all",
-                    color = SuzieeTheme.colors.accentSecondary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable { onOpenFullSearch(query) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-            }
-        }
+        )
 
         Spacer(modifier = Modifier.height(10.dp))
 
