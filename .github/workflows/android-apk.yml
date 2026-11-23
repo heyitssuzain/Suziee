@@ -238,9 +238,70 @@ jobs:
       # A real gate: a failing unit test fails the run. The previous revision ran this step
       # with `continue-on-error: true`, which silently swallowed a failing assertion, so a
       # green build did *not* actually prove the matching gate was correct.
+      # Robolectric's android-all sandbox jar is ~144 MB and its own downloader ignores Gradle's
+      # caches, proxies and retries, so it is the flakiest thing in this workflow. It is
+      # deliberately *not* hidden behind actions/cache: a restored cache entry would short-circuit
+      # the sha512 verification the pre-fetch below relies on, and a cache-service error fails the
+      # step, which would add a new way for this gate to go red. The download is retried across two
+      # mirrors and verified instead - seconds on a public repo, and deterministic every time.
       - name: Run unit tests
         run: |
           set +e
+
+          # --- Robolectric sandbox pre-fetch -------------------------------------------------
+          # The Robolectric runner fetches its android-all sandbox jar at test time with its own
+          # MavenArtifactFetcher: no Gradle cache, no proxy, and no retry. Run #37 (2026-11-23) died
+          # on exactly that, for both Robolectric classes:
+          #   Failed to fetch maven artifact org.robolectric:android-all-instrumented:14-robolectric-10818077-i7
+          # even though the same two tests passed on 2026-10-29 and the jar is live on Maven Central
+          # (HTTP 200, 151142227 bytes). A 144 MB fetch with a single attempt is simply flaky.
+          #
+          # MavenArtifactFetcher returns immediately when the jar is already present in Robolectric's
+          # local Maven repository (it checks new File(localRepositoryDir, artifact.jarPath()).exists()),
+          # so seed that exact path first with a retrying, checksum-verified download. This follows the
+          # official Robolectric guidance, "Fetching android-all jars manually before running tests".
+          #
+          # Everything here is deliberately guarded: if the pre-fetch cannot complete for any reason
+          # the old behaviour is left untouched and the build can never fail because of it.
+          M2_HOME="${HOME}/.m2"
+          M2_REPO="${M2_HOME}/repository"
+          if [ -f "${M2_HOME}/settings.xml" ]; then
+            SETTINGS_REPO="$(sed -n 's:.*<localRepository>\(.*\)</localRepository>.*:\1:p' "${M2_HOME}/settings.xml" 2>/dev/null | head -n1 | tr -d '[:space:]')"
+            [ -n "${SETTINGS_REPO}" ] && M2_REPO="${SETTINGS_REPO}"
+          fi
+          ROBOLECTRIC_VER="14-robolectric-10818077-i7"
+          ROBOLECTRIC_JAR="android-all-instrumented-${ROBOLECTRIC_VER}.jar"
+          ROBOLECTRIC_DIR="${M2_REPO}/org/robolectric/android-all-instrumented/${ROBOLECTRIC_VER}"
+          ROBOLECTRIC_RELPATH="org/robolectric/android-all-instrumented/${ROBOLECTRIC_VER}/${ROBOLECTRIC_JAR}"
+          if [ -s "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}" ]; then
+            echo "::notice::ROBOLECTRIC sandbox already present ($(du -h "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}" | cut -f1))"
+          else
+            mkdir -p "${ROBOLECTRIC_DIR}"
+            for MIRROR in "https://repo1.maven.org/maven2" "https://repo.maven.apache.org/maven2"; do
+              [ -s "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}" ] && break
+              URL="${MIRROR}/${ROBOLECTRIC_RELPATH}"
+              echo "::notice::ROBOLECTRIC pre-fetching ${ROBOLECTRIC_VER} from ${MIRROR}"
+              curl -fL --retry 6 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 900 \
+                -o "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}.part" "${URL}" 2>/dev/null || true
+              if [ ! -s "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}.part" ]; then
+                rm -f "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}.part"
+                continue
+              fi
+              EXPECTED_SHA="$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 "${URL}.sha512" 2>/dev/null | tr -d '\r' | cut -d' ' -f1 | tr -d '[:space:]')"
+              ACTUAL_SHA="$(sha512sum "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}.part" | cut -d' ' -f1)"
+              if [ -z "${EXPECTED_SHA}" ] || [ "${EXPECTED_SHA}" = "${ACTUAL_SHA}" ]; then
+                [ -z "${EXPECTED_SHA}" ] && echo "::warning::ROBOLECTRIC checksum unavailable from ${MIRROR}; keeping the unverified download."
+                mv "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}.part" "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}"
+                echo "::notice::ROBOLECTRIC sandbox ready ($(du -h "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}" | cut -f1))"
+              else
+                echo "::warning::ROBOLECTRIC checksum mismatch from ${MIRROR} (expected='${EXPECTED_SHA}' actual='${ACTUAL_SHA}'); discarding and trying the next mirror."
+                rm -f "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}.part"
+              fi
+            done
+            [ -s "${ROBOLECTRIC_DIR}/${ROBOLECTRIC_JAR}" ] \
+              || echo "::warning::ROBOLECTRIC sandbox could not be pre-fetched; Robolectric will attempt its own download."
+          fi
+
           # `--no-configuration-cache` is deliberate. The project sets
           # org.gradle.configuration-cache=true, and the build step above cached an entry for a
           # completely different task set (assembleDebug). Handing a task-less "BUILD FAILED" back
@@ -291,11 +352,23 @@ jobs:
             echo "::notice::TESTRESULT ${name} ${t} ${fl} ${er}"
           done
           echo "===== FAILURES ====="
-          grep -rhoE '<failure[^>]*message="[^"]{0,160}' \
+          grep -rhoE '<failure[^>]*message="[^"]{0,220}' \
             app/build/test-results/testDebugUnitTest 2>/dev/null | head -5 \
-            | while IFS= read -r line; do echo "::error::TESTFAIL ${line}"; done
+            | while IFS= read -r line; do echo "::error::TESTFAIL ${line//%/%25}"; done
+
+          # The <failure> element's body holds the full stack trace of a failing test. Its
+          # "Caused by:" chain is the only place the real reason for a mid-test failure (for
+          # example a Robolectric sandbox download error) is visible, because Gradle's own
+          # output does not echo test stack traces. Surface that chain explicitly.
+          grep -rhoE 'Caused by: [^<]{0,240}' \
+            app/build/test-results/testDebugUnitTest 2>/dev/null | sort -u | head -8 \
+            | while IFS= read -r line; do echo "::error::TESTCAUSE ${line//%/%25}"; done
+          grep -rhoE '(Failed to fetch|Unable to resolve|Could not (resolve|download)|No such file)[^<]{0,200}' \
+            app/build/test-results/testDebugUnitTest 2>/dev/null | sort -u | head -8 \
+            | while IFS= read -r line; do echo "::error::TESTREASON ${line//%/%25}"; done
+
           grep -E "^e: |error: |FAILED|Execution failed for task" test.log 2>/dev/null | head -8 \
-            | while IFS= read -r line; do echo "::error::TESTLOG ${line}"; done
+            | while IFS= read -r line; do echo "::error::TESTLOG ${line//%/%25}"; done
 
           # Actions step logs need admin rights to read, but check-run annotations do not. So a
           # failed run has to carry its own explanation: re-emit the whole Gradle failure block
