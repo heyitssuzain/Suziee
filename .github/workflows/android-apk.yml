@@ -241,8 +241,31 @@ jobs:
       - name: Run unit tests
         run: |
           set +e
-          gradle testDebugUnitTest --stacktrace > test.log 2>&1
+          # `--no-configuration-cache` is deliberate. The project sets
+          # org.gradle.configuration-cache=true, and the build step above cached an entry for a
+          # completely different task set (assembleDebug). Handing a task-less "BUILD FAILED" back
+          # in that situation is a well known Gradle failure mode, and it is exactly the shape of
+          # the failure this step hit: it died in seconds, before a single task ever ran, and
+          # produced no test-results XML. Disabling the cache for this one invocation removes that
+          # whole failure class without touching the build step's caching.
+          gradle :app:testDebugUnitTest --stacktrace --console=plain --no-configuration-cache \
+            > test-attempt1.log 2>&1
           STATUS=$?
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::warning::Unit tests failed on attempt 1 (exit $STATUS); retrying once with every cache bypassed, to tell a real failure apart from a transient one."
+            gradle :app:testDebugUnitTest --stacktrace --console=plain \
+              --no-configuration-cache --no-build-cache --refresh-dependencies \
+              > test.log 2>&1
+            STATUS=$?
+            if [ "$STATUS" -eq 0 ]; then
+              echo "::notice::Retry passed - attempt 1 was a transient failure, not a test failure."
+            fi
+          else
+            cp test-attempt1.log test.log
+          fi
+          echo "===== RUNNER HEADROOM ====="
+          df -h . | tail -1
+          echo "::notice::DISK $(df -h . | tail -1 | sed 's/%/%25/g')"
           echo "===== TEST OUTPUT (tail) ====="
           tail -n 40 test.log
           echo "===== TEST ERRORS ====="
@@ -269,10 +292,35 @@ jobs:
           done
           echo "===== FAILURES ====="
           grep -rhoE '<failure[^>]*message="[^"]{0,160}' \
-            app/build/test-results/testDebugUnitTest 2>/dev/null | head -8 \
+            app/build/test-results/testDebugUnitTest 2>/dev/null | head -5 \
             | while IFS= read -r line; do echo "::error::TESTFAIL ${line}"; done
-          grep -E "^e: |error: |FAILED|Execution failed for task" test.log 2>/dev/null | head -12 \
+          grep -E "^e: |error: |FAILED|Execution failed for task" test.log 2>/dev/null | head -8 \
             | while IFS= read -r line; do echo "::error::TESTLOG ${line}"; done
+
+          # Actions step logs need admin rights to read, but check-run annotations do not. So a
+          # failed run has to carry its own explanation: re-emit the whole Gradle failure block
+          # (the "FAILURE: Build failed" head plus the --stacktrace "Caused by" chain) line by
+          # line. Without this, a pre-execution failure leaves no readable trace at all.
+          emit_gradle_failure() {
+            file="$1"; limit="$2"; level="$3"
+            # Match unanchored on purpose: this must survive a leading BOM or any stray prefix.
+            awk '/FAILURE: Build failed/{f=1} f' "$file" \
+              | head -"$limit" | tr -d '\r' \
+              | while IFS= read -r line; do
+                  echo "::$level::GLOG ${line//%/%25}"
+                done
+          }
+          if [ -f test.log ] && grep -q "BUILD FAILED" test.log; then
+            emit_gradle_failure test.log 20 error
+          fi
+          if [ -f test-attempt1.log ] && grep -q "BUILD FAILED" test-attempt1.log; then
+            if grep -q "BUILD FAILED" test.log 2>/dev/null; then
+              emit_gradle_failure test-attempt1.log 8 error
+            else
+              echo "::warning::attempt 1 failed but the retry passed, so attempt 1 was transient. Attempt 1's Gradle failure block follows:"
+              emit_gradle_failure test-attempt1.log 8 warning
+            fi
+          fi
           exit 0
 
       - name: Write job summary
