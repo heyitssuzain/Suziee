@@ -22,6 +22,7 @@ class SuzieePreferences(private val context: Context) {
         val AUTOPLAY = booleanPreferencesKey("autoplay")
         val SHUFFLE_DEFAULT = booleanPreferencesKey("shuffle_default")
         val REPEAT_MODE = intPreferencesKey("repeat_mode")
+        val THEME_ID = stringPreferencesKey("theme_id")
     }
 
     val isFirstLaunchCompleted: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -61,6 +62,20 @@ class SuzieePreferences(private val context: Context) {
     suspend fun setAutoplayEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[Keys.AUTOPLAY] = enabled
+        }
+    }
+
+    /**
+     * Persisted design identity. The default keeps the existing dark neon look (Aurora Glass)
+     * so upgrading users do not get a surprise visual change on first launch.
+     */
+    val themeId: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[Keys.THEME_ID] ?: "aurora_glass"
+    }
+
+    suspend fun setThemeId(themeId: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.THEME_ID] = themeId
         }
     }
 }

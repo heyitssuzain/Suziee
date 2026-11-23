@@ -19,8 +19,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
+import com.example.ui.theme.SuzieeTheme
 
 @Composable
 fun WaveformVisualizer(
@@ -29,9 +28,13 @@ fun WaveformVisualizer(
     modifier: Modifier = Modifier,
     barCount: Int = 20,
     height: Dp = 48.dp,
-    primaryColor: Color = SuzieeAccentPrimary,
-    secondaryColor: Color = SuzieeAccentSecondary
+    primaryColor: Color? = null,
+    secondaryColor: Color? = null
 ) {
+    val themeColors = SuzieeTheme.colors
+    val resolvedPrimary = primaryColor ?: themeColors.accentPrimary
+    val resolvedSecondary = secondaryColor ?: themeColors.accentSecondary
+
     val infiniteTransition = rememberInfiniteTransition(label = "visualizer_anim")
     val phase by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -70,7 +73,7 @@ fun WaveformVisualizer(
 
             drawRoundRect(
                 brush = Brush.verticalGradient(
-                    colors = listOf(primaryColor, secondaryColor),
+                    colors = listOf(resolvedPrimary, resolvedSecondary),
                     startY = yOffset,
                     endY = yOffset + barHeight
                 ),

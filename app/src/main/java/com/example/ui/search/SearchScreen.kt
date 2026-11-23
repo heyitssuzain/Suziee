@@ -1,5 +1,7 @@
 package com.example.ui.search
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -55,16 +57,6 @@ import androidx.compose.ui.unit.sp
 import com.example.domain.model.Track
 import com.example.playback.MusicPlayerManager
 import com.example.ui.components.TrackRowItem
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeError
-import com.example.ui.theme.SuzieeSurfaceCard
-import com.example.ui.theme.SuzieeSurfaceElevated
-import com.example.ui.theme.SuzieeTextMuted
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -134,7 +126,7 @@ fun SearchScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(SuzieeBgPrimary)
+            .background(SuzieeTheme.colors.bgPrimary)
             .testTag("search_screen")
     ) {
         // Search Bar
@@ -156,7 +148,7 @@ fun SearchScreen(
                 placeholder = {
                     Text(
                         text = "Search song, anime opening, artist...",
-                        color = SuzieeTextMuted,
+                        color = SuzieeTheme.colors.textMuted,
                         fontSize = 14.sp
                     )
                 },
@@ -164,7 +156,7 @@ fun SearchScreen(
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = "Search icon",
-                        tint = SuzieeAccentSecondary
+                        tint = SuzieeTheme.colors.accentSecondary
                     )
                 },
                 trailingIcon = {
@@ -175,26 +167,26 @@ fun SearchScreen(
                                 searchResults = emptyList()
                                 errorMessage = null
                             }) {
-                                Icon(Icons.Default.Clear, contentDescription = "Clear", tint = SuzieeTextSecondary)
+                                Icon(Icons.Default.Clear, contentDescription = "Clear", tint = SuzieeTheme.colors.textSecondary)
                             }
                         }
                         IconButton(
                             onClick = onOpenVoiceSearch,
                             modifier = Modifier.testTag("search_mic_button")
                         ) {
-                            Icon(Icons.Default.Mic, contentDescription = "Voice Search", tint = SuzieeAccentPrimary)
+                            Icon(Icons.Default.Mic, contentDescription = "Voice Search", tint = SuzieeTheme.colors.accentPrimary)
                         }
                     }
                 },
                 singleLine = true,
                 shape = RoundedCornerShape(20.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = SuzieeAccentSecondary,
-                    unfocusedBorderColor = SuzieeBorder,
-                    focusedTextColor = SuzieeTextPrimary,
-                    unfocusedTextColor = SuzieeTextPrimary,
-                    focusedContainerColor = SuzieeSurfaceCard,
-                    unfocusedContainerColor = SuzieeSurfaceCard
+                    focusedBorderColor = SuzieeTheme.colors.accentSecondary,
+                    unfocusedBorderColor = SuzieeTheme.colors.border,
+                    focusedTextColor = SuzieeTheme.colors.textPrimary,
+                    unfocusedTextColor = SuzieeTheme.colors.textPrimary,
+                    focusedContainerColor = SuzieeTheme.colors.surfaceCard,
+                    unfocusedContainerColor = SuzieeTheme.colors.surfaceCard
                 ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { executeSearch(searchQuery) }),
@@ -226,12 +218,12 @@ fun SearchScreen(
                         Icon(
                             imageVector = Icons.Default.History,
                             contentDescription = null,
-                            tint = SuzieeTextMuted,
+                            tint = SuzieeTheme.colors.textMuted,
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
                             text = suggestion,
-                            color = SuzieeTextPrimary,
+                            color = SuzieeTheme.colors.textPrimary,
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.padding(start = 12.dp)
                         )
@@ -254,13 +246,13 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.Center
                     ) {
                         CircularProgressIndicator(
-                            color = SuzieeAccentSecondary,
+                            color = SuzieeTheme.colors.accentSecondary,
                             strokeWidth = 3.dp
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = "Searching online music library...",
-                            color = SuzieeTextSecondary,
+                            color = SuzieeTheme.colors.textSecondary,
                             fontSize = 14.sp
                         )
                     }
@@ -276,17 +268,17 @@ fun SearchScreen(
                     ) {
                         Text(
                             text = errorMessage ?: "",
-                            color = SuzieeError,
+                            color = SuzieeTheme.colors.error,
                             textAlign = TextAlign.Center,
                             style = MaterialTheme.typography.bodyLarge
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(
                             onClick = { executeSearch(searchQuery) },
-                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary)
+                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, tint = SuzieeBgPrimary)
-                            Text("Retry Search", color = SuzieeBgPrimary, modifier = Modifier.padding(start = 6.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = null, tint = SuzieeTheme.colors.bgPrimary)
+                            Text("Retry Search", color = SuzieeTheme.colors.bgPrimary, modifier = Modifier.padding(start = 6.dp))
                         }
                     }
                 }
@@ -299,7 +291,7 @@ fun SearchScreen(
                         item {
                             Text(
                                 text = "Results (${searchResults.size})",
-                                color = SuzieeTextSecondary,
+                                color = SuzieeTheme.colors.textSecondary,
                                 style = MaterialTheme.typography.labelMedium,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                             )
@@ -338,12 +330,12 @@ fun SearchScreen(
                     ) {
                         Text(
                             text = "Discover Any Song",
-                            color = SuzieeTextPrimary,
+                            color = SuzieeTheme.colors.textPrimary,
                             style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
                             text = "Search by song title, anime opening, artist, or use your voice to find any track in the world.",
-                            color = SuzieeTextSecondary,
+                            color = SuzieeTheme.colors.textSecondary,
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.padding(top = 8.dp, bottom = 20.dp)
@@ -352,36 +344,36 @@ fun SearchScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = SuzieeSurfaceElevated,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder),
+                                color = SuzieeTheme.colors.surfaceElevated,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border),
                                 modifier = Modifier.clickable {
                                     searchQuery = "Ado"
                                     executeSearch("Ado")
                                 }
                             ) {
-                                Text("Ado", color = SuzieeAccentSecondary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+                                Text("Ado", color = SuzieeTheme.colors.accentSecondary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
                             }
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = SuzieeSurfaceElevated,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder),
+                                color = SuzieeTheme.colors.surfaceElevated,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border),
                                 modifier = Modifier.clickable {
                                     searchQuery = "Yoasobi"
                                     executeSearch("Yoasobi")
                                 }
                             ) {
-                                Text("Yoasobi", color = SuzieeAccentSecondary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+                                Text("Yoasobi", color = SuzieeTheme.colors.accentSecondary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
                             }
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
-                                color = SuzieeSurfaceElevated,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder),
+                                color = SuzieeTheme.colors.surfaceElevated,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border),
                                 modifier = Modifier.clickable {
                                     searchQuery = "Naruto"
                                     executeSearch("Naruto")
                                 }
                             ) {
-                                Text("Naruto", color = SuzieeAccentSecondary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+                                Text("Naruto", color = SuzieeTheme.colors.accentSecondary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
                             }
                         }
                     }

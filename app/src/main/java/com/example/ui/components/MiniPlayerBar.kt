@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -38,13 +40,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.playback.PlaybackState
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeSurfaceCard
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
-
 @Composable
 fun MiniPlayerBar(
     state: PlaybackState,
@@ -68,9 +63,9 @@ fun MiniPlayerBar(
             .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onExpandPlayer)
             .testTag("mini_player_bar"),
-        color = SuzieeSurfaceCard,
+        color = SuzieeTheme.colors.surfaceCard,
         shadowElevation = 8.dp,
-        border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder)
+        border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border)
     ) {
         Column {
             // Linear progress indicator on top edge
@@ -79,8 +74,8 @@ fun MiniPlayerBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(2.5.dp),
-                color = SuzieeAccentSecondary,
-                trackColor = SuzieeBorder
+                color = SuzieeTheme.colors.accentSecondary,
+                trackColor = SuzieeTheme.colors.border
             )
 
             Row(
@@ -94,7 +89,7 @@ fun MiniPlayerBar(
                     modifier = Modifier
                         .size(46.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(SuzieeBorder),
+                        .background(SuzieeTheme.colors.border),
                     contentAlignment = Alignment.Center
                 ) {
                     if (track.artworkUrl.isNotBlank()) {
@@ -108,7 +103,7 @@ fun MiniPlayerBar(
                         Icon(
                             imageVector = Icons.Default.MusicNote,
                             contentDescription = null,
-                            tint = SuzieeAccentPrimary,
+                            tint = SuzieeTheme.colors.accentPrimary,
                             modifier = Modifier.size(24.dp)
                         )
                     }
@@ -122,14 +117,14 @@ fun MiniPlayerBar(
                 ) {
                     Text(
                         text = track.title,
-                        color = SuzieeTextPrimary,
+                        color = SuzieeTheme.colors.textPrimary,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = track.artist,
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -144,7 +139,7 @@ fun MiniPlayerBar(
                     Icon(
                         imageVector = Icons.Default.SkipPrevious,
                         contentDescription = "Previous Track",
-                        tint = SuzieeTextPrimary,
+                        tint = SuzieeTheme.colors.textPrimary,
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -155,7 +150,7 @@ fun MiniPlayerBar(
                         modifier = Modifier
                             .size(36.dp)
                             .padding(6.dp),
-                        color = SuzieeAccentSecondary,
+                        color = SuzieeTheme.colors.accentSecondary,
                         strokeWidth = 2.5.dp
                     )
                 } else {
@@ -174,7 +169,7 @@ fun MiniPlayerBar(
                                 state.isPlaying -> "Pause"
                                 else -> "Play"
                             },
-                            tint = SuzieeAccentSecondary,
+                            tint = SuzieeTheme.colors.accentSecondary,
                             modifier = Modifier.size(28.dp)
                         )
                     }
@@ -188,7 +183,7 @@ fun MiniPlayerBar(
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "Next Track",
-                        tint = SuzieeTextPrimary,
+                        tint = SuzieeTheme.colors.textPrimary,
                         modifier = Modifier.size(24.dp)
                     )
                 }

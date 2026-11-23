@@ -3,15 +3,22 @@ package com.example
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -33,6 +40,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +53,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.domain.model.Track
 import com.example.downloads.DownloadManager
 import com.example.playback.MusicPlayerManager
@@ -53,19 +62,16 @@ import com.example.ui.components.MiniPlayerBar
 import com.example.ui.components.VoiceSearchModal
 import com.example.ui.downloads.DownloadsScreen
 import com.example.ui.home.HomeScreen
+import com.example.ui.importing.ImportPlaylistDialog
 import com.example.ui.landing.LandingScreen
 import com.example.ui.library.LibraryScreen
 import com.example.ui.player.PlayerScreen
 import com.example.ui.search.SearchScreen
 import com.example.ui.settings.SettingsScreen
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeBgSecondary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeTextMuted
-import com.example.ui.theme.SuzieeTextPrimary
+import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.SuzieeTheme
+import com.example.ui.theme.SuzieeThemeId
+import com.example.ui.theme.TopSystemBarScrim
 import com.example.voice.VoiceCommand
 import com.example.voice.VoiceRecognizer
 import kotlinx.coroutines.launch
@@ -96,7 +102,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Draw behind both system bars from the very first frame. The scrims in the Compose
+        // tree (not an opaque window colour) keep the icons legible on every theme.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT
+            ),
+            navigationBarStyle = SystemBarStyle.auto(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT
+            )
+        )
 
         val app = application as SuzieeApplication
         playerManager = app.playerManager
@@ -104,12 +121,18 @@ class MainActivity : ComponentActivity() {
         voiceRecognizer = VoiceRecognizer(this)
 
         setContent {
-            SuzieeTheme {
-                SuzieeApp(
-                    playerManager = playerManager,
-                    downloadManager = downloadManager,
-                    voiceRecognizer = voiceRecognizer
-                )
+            val themeKey by app.preferences.themeId.collectAsState(initial = "aurora_glass")
+            val reducedMotion by app.preferences.isReducedMotion.collectAsState(initial = false)
+            val themeId = remember(themeKey) { SuzieeThemeId.fromKey(themeKey) }
+
+            SuzieeTheme(themeId = themeId) {
+                CompositionLocalProvider(LocalReducedMotion provides reducedMotion) {
+                    SuzieeApp(
+                        playerManager = playerManager,
+                        downloadManager = downloadManager,
+                        voiceRecognizer = voiceRecognizer
+                    )
+                }
             }
         }
     }
@@ -180,6 +203,7 @@ fun SuzieeApp(
     var showPlayerFullScreen by remember { mutableStateOf(false) }
     var showSettingsScreen by remember { mutableStateOf(false) }
     var showVoiceModal by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
     var trackForPlaylistDialog by remember { mutableStateOf<Track?>(null) }
 
     val playbackState by playerManager.playbackState.collectAsState()
@@ -201,137 +225,194 @@ fun SuzieeApp(
     }
 
     if (showSettingsScreen) {
-        SettingsScreen(
-            preferences = app.preferences,
-            repository = playerManager.repository,
-            onBack = { showSettingsScreen = false },
-            onReplayIntro = {
-                showSettingsScreen = false
-                showLanding = true
-            },
-            modifier = Modifier.statusBarsPadding()
-        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(SuzieeTheme.colors.bgPrimary)
+        ) {
+            // The settings content starts below the status bar, so the scrim stays visible only
+            // in the inset strip behind the system icons and never dims the app bar.
+            TopSystemBarScrim(modifier = Modifier.align(Alignment.TopCenter))
+            SettingsScreen(
+                preferences = app.preferences,
+                repository = playerManager.repository,
+                onBack = { showSettingsScreen = false },
+                onReplayIntro = {
+                    showSettingsScreen = false
+                    showLanding = true
+                },
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+            )
+        }
         return
     }
 
-    Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(SuzieeBgPrimary),
-        containerColor = SuzieeBgPrimary,
-        bottomBar = {
-            Column(modifier = Modifier.navigationBarsPadding()) {
-                // Mini Player Bar above Navigation
-                if (playbackState.currentTrack != null && !showPlayerFullScreen) {
-                    MiniPlayerBar(
-                        state = playbackState,
-                        onExpandPlayer = { showPlayerFullScreen = true },
-                        onTogglePlayPause = { playerManager.togglePlayPause() },
-                        onSkipNext = { playerManager.playNext() },
-                        onSkipPrevious = { playerManager.playPrevious() },
-                        onRetry = { playerManager.retryCurrent() }
-                    )
-                }
-
-                // Bottom Navigation
-                NavigationBar(
-                    containerColor = SuzieeBgSecondary,
-                    contentColor = SuzieeTextPrimary,
-                    tonalElevation = 8.dp,
-                    modifier = Modifier.testTag("bottom_nav_bar")
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(SuzieeTheme.colors.bgPrimary),
+            containerColor = SuzieeTheme.colors.bgPrimary,
+            // The screens handle their own status-bar padding so the hero artwork can bleed
+            // behind the clock; the Scaffold must not add a second, opaque inset layer.
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            bottomBar = {
+                Column(
+                    modifier = Modifier
+                        .background(SuzieeTheme.colors.bgSecondary)
+                        .navigationBarsPadding()
                 ) {
-                    MainDestination.entries.forEach { destination ->
-                        val selected = currentDestination == destination
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = {
-                                if (destination == MainDestination.SEARCH && currentDestination == MainDestination.SEARCH) {
-                                    // already here
-                                }
-                                currentDestination = destination
+                    // Mini Player Bar above Navigation
+                    if (playbackState.currentTrack != null && !showPlayerFullScreen) {
+                        MiniPlayerBar(
+                            state = playbackState,
+                            onExpandPlayer = { showPlayerFullScreen = true },
+                            onTogglePlayPause = { playerManager.togglePlayPause() },
+                            onSkipNext = { playerManager.playNext() },
+                            onSkipPrevious = { playerManager.playPrevious() },
+                            onRetry = { playerManager.retryCurrent() }
+                        )
+                    }
+
+                    // Bottom Navigation
+                    NavigationBar(
+                        containerColor = SuzieeTheme.colors.bgSecondary,
+                        contentColor = SuzieeTheme.colors.textPrimary,
+                        tonalElevation = 8.dp,
+                        windowInsets = WindowInsets(0, 0, 0, 0),
+                        modifier = Modifier.testTag("bottom_nav_bar")
+                    ) {
+                        MainDestination.entries.forEach { destination ->
+                            val selected = currentDestination == destination
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = {
+                                    if (destination == MainDestination.SEARCH && currentDestination == MainDestination.SEARCH) {
+                                        // already here
+                                    }
+                                    currentDestination = destination
+                                },
+                                icon = {
+                                    Icon(
+                                        imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
+                                        contentDescription = destination.title,
+                                        tint = if (selected) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textMuted
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = destination.title,
+                                        fontSize = 11.sp,
+                                        color = if (selected) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textMuted
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = SuzieeTheme.colors.border
+                                ),
+                                modifier = Modifier.testTag(destination.tag)
+                            )
+                        }
+                    }
+                }
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .statusBarsPadding()
+            ) {
+                when (currentDestination) {
+                    MainDestination.HOME -> {
+                        HomeScreen(
+                            playerManager = playerManager,
+                            onNavigateToSearch = { query ->
+                                searchQueryOverride = query
+                                currentDestination = MainDestination.SEARCH
                             },
-                            icon = {
-                                Icon(
-                                    imageVector = if (selected) destination.selectedIcon else destination.unselectedIcon,
-                                    contentDescription = destination.title,
-                                    tint = if (selected) SuzieeAccentSecondary else SuzieeTextMuted
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = destination.title,
-                                    fontSize = 11.sp,
-                                    color = if (selected) SuzieeAccentSecondary else SuzieeTextMuted
-                                )
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                indicatorColor = SuzieeBorder
-                            ),
-                            modifier = Modifier.testTag(destination.tag)
+                            onOpenVoiceSearch = { showVoiceModal = true },
+                            onNavigateToSettings = { showSettingsScreen = true },
+                            onTrackOptions = { trackForPlaylistDialog = it },
+                            onOpenImportPlaylist = { showImportDialog = true },
+                            onOpenLibrary = { currentDestination = MainDestination.LIBRARY },
+                            onOpenDownloads = { currentDestination = MainDestination.DOWNLOADS }
+                        )
+                    }
+                    MainDestination.SEARCH -> {
+                        SearchScreen(
+                            playerManager = playerManager,
+                            initialQuery = searchQueryOverride,
+                            onOpenVoiceSearch = { showVoiceModal = true },
+                            onTrackOptions = { trackForPlaylistDialog = it },
+                            onDownloadTrack = { track -> downloadManager.downloadTrack(track) }
+                        )
+                    }
+                    MainDestination.LIBRARY -> {
+                        LibraryScreen(
+                            playerManager = playerManager,
+                            onTrackOptions = { trackForPlaylistDialog = it },
+                            onDownloadTrack = { track -> downloadManager.downloadTrack(track) },
+                            onOpenImportPlaylist = { showImportDialog = true }
+                        )
+                    }
+                    MainDestination.DOWNLOADS -> {
+                        DownloadsScreen(
+                            playerManager = playerManager,
+                            downloadManager = downloadManager,
+                            onNavigateToSearch = { currentDestination = MainDestination.SEARCH }
                         )
                     }
                 }
             }
         }
-    ) { innerPadding ->
-        Box(
+
+        // Scrim behind the status-bar icons, above the screens but below the full player.
+        TopSystemBarScrim(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .zIndex(1f),
+            // The screens already start below the status bar; keep the scrim inside that strip
+            // instead of washing out the top of the home header.
+            extraHeight = 0.dp
+        )
+
+        // The full player lives at the root, not inside the Scaffold: it must cover the bottom
+        // navigation and the system bars for the mini-player expansion to feel continuous.
+        AnimatedVisibility(
+            visible = showPlayerFullScreen,
+            enter = fadeIn(tween(180)) + slideInVertically(
+                animationSpec = spring(dampingRatio = 0.86f, stiffness = 420f),
+                initialOffsetY = { it }
+            ),
+            exit = fadeOut(tween(160, easing = FastOutSlowInEasing)) + slideOutVertically(
+                animationSpec = tween(240, easing = FastOutSlowInEasing),
+                targetOffsetY = { it }
+            ),
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .statusBarsPadding()
+                .zIndex(2f)
         ) {
-            when (currentDestination) {
-                MainDestination.HOME -> {
-                    HomeScreen(
-                        playerManager = playerManager,
-                        onNavigateToSearch = { query ->
-                            searchQueryOverride = query
-                            currentDestination = MainDestination.SEARCH
-                        },
-                        onOpenVoiceSearch = { showVoiceModal = true },
-                        onNavigateToSettings = { showSettingsScreen = true },
-                        onTrackOptions = { trackForPlaylistDialog = it }
-                    )
-                }
-                MainDestination.SEARCH -> {
-                    SearchScreen(
-                        playerManager = playerManager,
-                        initialQuery = searchQueryOverride,
-                        onOpenVoiceSearch = { showVoiceModal = true },
-                        onTrackOptions = { trackForPlaylistDialog = it },
-                        onDownloadTrack = { track -> downloadManager.downloadTrack(track) }
-                    )
-                }
-                MainDestination.LIBRARY -> {
-                    LibraryScreen(
-                        playerManager = playerManager,
-                        onTrackOptions = { trackForPlaylistDialog = it },
-                        onDownloadTrack = { track -> downloadManager.downloadTrack(track) }
-                    )
-                }
-                MainDestination.DOWNLOADS -> {
-                    DownloadsScreen(
-                        playerManager = playerManager,
-                        downloadManager = downloadManager,
-                        onNavigateToSearch = { currentDestination = MainDestination.SEARCH }
-                    )
-                }
-            }
-
-            // Full Player Screen as animated overlay
-            AnimatedVisibility(
-                visible = showPlayerFullScreen,
-                enter = slideInVertically(initialOffsetY = { it }),
-                exit = slideOutVertically(targetOffsetY = { it })
-            ) {
-                PlayerScreen(
-                    playerManager = playerManager,
-                    onMinimize = { showPlayerFullScreen = false },
-                    onDownloadTrack = { track -> downloadManager.downloadTrack(track) },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            PlayerScreen(
+                playerManager = playerManager,
+                onMinimize = { showPlayerFullScreen = false },
+                onDownloadTrack = { track -> downloadManager.downloadTrack(track) },
+                modifier = Modifier.fillMaxSize()
+            )
         }
+    }
+
+    // External playlist importer (Spotify / Apple Music / plain track list)
+    if (showImportDialog) {
+        ImportPlaylistDialog(
+            repository = playerManager.repository,
+            onDismiss = { showImportDialog = false },
+            onImported = { _ ->
+                showImportDialog = false
+                currentDestination = MainDestination.LIBRARY
+            }
+        )
     }
 
     // Voice Search Modal

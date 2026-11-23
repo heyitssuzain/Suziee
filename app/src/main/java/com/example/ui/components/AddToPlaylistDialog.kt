@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -37,15 +39,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.example.domain.model.Playlist
 import com.example.domain.model.Track
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeSurfaceCard
-import com.example.ui.theme.SuzieeSurfaceElevated
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
-
 @Composable
 fun AddToPlaylistDialog(
     track: Track,
@@ -60,8 +53,8 @@ fun AddToPlaylistDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(20.dp),
-            color = SuzieeSurfaceCard,
-            border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder),
+            color = SuzieeTheme.colors.surfaceCard,
+            border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
@@ -73,12 +66,12 @@ fun AddToPlaylistDialog(
             ) {
                 Text(
                     text = "Add to Playlist",
-                    color = SuzieeTextPrimary,
+                    color = SuzieeTheme.colors.textPrimary,
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
                     text = track.title,
-                    color = SuzieeAccentSecondary,
+                    color = SuzieeTheme.colors.accentSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1
                 )
@@ -92,10 +85,10 @@ fun AddToPlaylistDialog(
                         label = { Text("Playlist Name") },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = SuzieeAccentSecondary,
-                            unfocusedBorderColor = SuzieeBorder,
-                            focusedTextColor = SuzieeTextPrimary,
-                            unfocusedTextColor = SuzieeTextPrimary
+                            focusedBorderColor = SuzieeTheme.colors.accentSecondary,
+                            unfocusedBorderColor = SuzieeTheme.colors.border,
+                            focusedTextColor = SuzieeTheme.colors.textPrimary,
+                            unfocusedTextColor = SuzieeTheme.colors.textPrimary
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -105,7 +98,7 @@ fun AddToPlaylistDialog(
                         horizontalArrangement = Arrangement.End
                     ) {
                         TextButton(onClick = { showCreateField = false }) {
-                            Text("Cancel", color = SuzieeTextSecondary)
+                            Text("Cancel", color = SuzieeTheme.colors.textSecondary)
                         }
                         Button(
                             onClick = {
@@ -114,9 +107,9 @@ fun AddToPlaylistDialog(
                                     onDismiss()
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary)
+                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
                         ) {
-                            Text("Create", color = SuzieeBgPrimary)
+                            Text("Create", color = SuzieeTheme.colors.bgPrimary)
                         }
                     }
                 } else {
@@ -124,15 +117,15 @@ fun AddToPlaylistDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(SuzieeSurfaceElevated)
+                            .background(SuzieeTheme.colors.surfaceElevated)
                             .clickable { showCreateField = true }
                             .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = SuzieeAccentSecondary)
+                        Icon(Icons.Default.Add, contentDescription = null, tint = SuzieeTheme.colors.accentSecondary)
                         Text(
                             text = "New Playlist",
-                            color = SuzieeAccentSecondary,
+                            color = SuzieeTheme.colors.accentSecondary,
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.padding(start = 12.dp)
                         )
@@ -155,10 +148,10 @@ fun AddToPlaylistDialog(
                                     .padding(vertical = 10.dp, horizontal = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.PlaylistPlay, contentDescription = null, tint = SuzieeTextSecondary)
+                                Icon(Icons.Default.PlaylistPlay, contentDescription = null, tint = SuzieeTheme.colors.textSecondary)
                                 Text(
                                     text = playlist.name,
-                                    color = SuzieeTextPrimary,
+                                    color = SuzieeTheme.colors.textPrimary,
                                     style = MaterialTheme.typography.bodyLarge,
                                     modifier = Modifier.padding(start = 12.dp)
                                 )

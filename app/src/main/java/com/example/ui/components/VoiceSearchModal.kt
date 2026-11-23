@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import com.example.ui.theme.SuzieeTheme
+
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -52,15 +54,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeError
-import com.example.ui.theme.SuzieeSurfaceCard
-import com.example.ui.theme.SuzieeTextMuted
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
 import com.example.voice.VoiceCommand
 import com.example.voice.VoiceCommandParser
 import com.example.voice.VoiceRecognizer
@@ -125,8 +118,8 @@ fun VoiceSearchModal(
     }) {
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = SuzieeSurfaceCard,
-            border = androidx.compose.foundation.BorderStroke(1.5.dp, SuzieeBorder),
+            color = SuzieeTheme.colors.surfaceCard,
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, SuzieeTheme.colors.border),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
@@ -146,7 +139,7 @@ fun VoiceSearchModal(
                 ) {
                     Text(
                         text = "SUZIEE VOICE",
-                        color = SuzieeAccentSecondary,
+                        color = SuzieeTheme.colors.accentSecondary,
                         style = MaterialTheme.typography.labelLarge.copy(
                             letterSpacing = 2.sp,
                             fontWeight = FontWeight.Bold
@@ -158,7 +151,7 @@ fun VoiceSearchModal(
                             onDismiss()
                         }
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SuzieeTextMuted)
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = SuzieeTheme.colors.textMuted)
                     }
                 }
 
@@ -178,7 +171,7 @@ fun VoiceSearchModal(
                                 .border(
                                     2.dp,
                                     Brush.radialGradient(
-                                        listOf(SuzieeAccentSecondary.copy(alpha = 0.6f), androidx.compose.ui.graphics.Color.Transparent)
+                                        listOf(SuzieeTheme.colors.accentSecondary.copy(alpha = 0.6f), androidx.compose.ui.graphics.Color.Transparent)
                                     ),
                                     CircleShape
                                 )
@@ -190,7 +183,7 @@ fun VoiceSearchModal(
                         modifier = Modifier
                             .size(76.dp)
                             .background(
-                                brush = Brush.linearGradient(listOf(SuzieeAccentPrimary, SuzieeAccentSecondary)),
+                                brush = Brush.linearGradient(listOf(SuzieeTheme.colors.accentPrimary, SuzieeTheme.colors.accentSecondary)),
                                 shape = CircleShape
                             ),
                         contentAlignment = Alignment.Center
@@ -198,14 +191,14 @@ fun VoiceSearchModal(
                         if (voiceState is VoiceState.Processing) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(36.dp),
-                                color = SuzieeBgPrimary,
+                                color = SuzieeTheme.colors.bgPrimary,
                                 strokeWidth = 3.dp
                             )
                         } else {
                             Icon(
                                 imageVector = Icons.Default.Mic,
                                 contentDescription = "Microphone",
-                                tint = SuzieeBgPrimary,
+                                tint = SuzieeTheme.colors.bgPrimary,
                                 modifier = Modifier.size(38.dp)
                             )
                         }
@@ -219,12 +212,12 @@ fun VoiceSearchModal(
                     is VoiceState.Listening -> {
                         Text(
                             text = "Listening...",
-                            color = SuzieeTextPrimary,
+                            color = SuzieeTheme.colors.textPrimary,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                         )
                         Text(
                             text = "Say \"Play Believer\", \"Next song\", \"Pause\", or any title",
-                            color = SuzieeTextSecondary,
+                            color = SuzieeTheme.colors.textSecondary,
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
@@ -233,14 +226,14 @@ fun VoiceSearchModal(
                     is VoiceState.Processing -> {
                         Text(
                             text = "Interpreting audio command...",
-                            color = SuzieeAccentSecondary,
+                            color = SuzieeTheme.colors.accentSecondary,
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
                     is VoiceState.Success -> {
                         Text(
                             text = "\"${voiceState.spokenText}\"",
-                            color = SuzieeAccentSecondary,
+                            color = SuzieeTheme.colors.accentSecondary,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             textAlign = TextAlign.Center
                         )
@@ -248,7 +241,7 @@ fun VoiceSearchModal(
                     is VoiceState.Error -> {
                         Text(
                             text = voiceState.message,
-                            color = SuzieeError,
+                            color = SuzieeTheme.colors.error,
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center
                         )
@@ -261,15 +254,15 @@ fun VoiceSearchModal(
                                     permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary)
+                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
                         ) {
-                            Text("Try Again", color = SuzieeBgPrimary)
+                            Text("Try Again", color = SuzieeTheme.colors.bgPrimary)
                         }
                     }
                     VoiceState.Idle -> {
                         Text(
                             text = "Tap to speak",
-                            color = SuzieeTextSecondary,
+                            color = SuzieeTheme.colors.textSecondary,
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }

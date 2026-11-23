@@ -1,5 +1,7 @@
 package com.example.ui.downloads
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -43,14 +45,6 @@ import androidx.compose.ui.unit.sp
 import com.example.downloads.DownloadManager
 import com.example.playback.MusicPlayerManager
 import com.example.ui.components.TrackRowItem
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeSurfaceCard
-import com.example.ui.theme.SuzieeTextMuted
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -73,7 +67,7 @@ fun DownloadsScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .background(SuzieeBgPrimary)
+            .background(SuzieeTheme.colors.bgPrimary)
             .testTag("downloads_screen"),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)
     ) {
@@ -81,7 +75,7 @@ fun DownloadsScreen(
         item {
             Text(
                 text = "Offline Downloads",
-                color = SuzieeTextPrimary,
+                color = SuzieeTheme.colors.textPrimary,
                 style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
             )
 
@@ -91,8 +85,8 @@ fun DownloadsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp)),
-                color = SuzieeSurfaceCard,
-                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder)
+                color = SuzieeTheme.colors.surfaceCard,
+                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -104,18 +98,18 @@ fun DownloadsScreen(
                             Icon(
                                 imageVector = Icons.Default.DownloadDone,
                                 contentDescription = null,
-                                tint = SuzieeAccentSecondary
+                                tint = SuzieeTheme.colors.accentSecondary
                             )
                             Text(
                                 text = "Device Storage",
-                                color = SuzieeTextPrimary,
+                                color = SuzieeTheme.colors.textPrimary,
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                                 modifier = Modifier.padding(start = 8.dp)
                             )
                         }
                         Text(
                             text = String.format("%.1f MB used", totalSizeMb),
-                            color = SuzieeAccentSecondary,
+                            color = SuzieeTheme.colors.accentSecondary,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -125,7 +119,7 @@ fun DownloadsScreen(
 
                     Text(
                         text = "Downloaded songs can be enjoyed anywhere without Wi-Fi or cellular data.",
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -139,12 +133,12 @@ fun DownloadsScreen(
                     onClick = {
                         playerManager.playTrack(downloadedTracks.first(), downloadedTracks)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary),
+                    colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary),
                     shape = RoundedCornerShape(20.dp),
                     modifier = Modifier.padding(bottom = 12.dp)
                 ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = SuzieeBgPrimary)
-                    Text("Play All Downloaded (${downloadedTracks.size})", color = SuzieeBgPrimary)
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = SuzieeTheme.colors.bgPrimary)
+                    Text("Play All Downloaded (${downloadedTracks.size})", color = SuzieeTheme.colors.bgPrimary)
                 }
             }
         }
@@ -155,7 +149,7 @@ fun DownloadsScreen(
             item {
                 Text(
                     text = "ACTIVE DOWNLOADS",
-                    color = SuzieeAccentSecondary,
+                    color = SuzieeTheme.colors.accentSecondary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.5.sp,
@@ -169,22 +163,22 @@ fun DownloadsScreen(
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
                         .clip(RoundedCornerShape(10.dp)),
-                    color = SuzieeSurfaceCard
+                    color = SuzieeTheme.colors.surfaceCard
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text(text = "Downloading track...", color = SuzieeTextPrimary, fontSize = 13.sp)
-                            Text(text = "${d.progressPercent}%", color = SuzieeAccentSecondary, fontSize = 13.sp)
+                            Text(text = "Downloading track...", color = SuzieeTheme.colors.textPrimary, fontSize = 13.sp)
+                            Text(text = "${d.progressPercent}%", color = SuzieeTheme.colors.accentSecondary, fontSize = 13.sp)
                         }
                         Spacer(modifier = Modifier.height(6.dp))
                         LinearProgressIndicator(
                             progress = { d.progressPercent / 100f },
                             modifier = Modifier.fillMaxWidth(),
-                            color = SuzieeAccentSecondary,
-                            trackColor = SuzieeBorder
+                            color = SuzieeTheme.colors.accentSecondary,
+                            trackColor = SuzieeTheme.colors.border
                         )
                     }
                 }
@@ -197,7 +191,7 @@ fun DownloadsScreen(
             item {
                 Text(
                     text = "FAILED DOWNLOADS",
-                    color = SuzieeAccentSecondary,
+                    color = SuzieeTheme.colors.accentSecondary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.5.sp,
@@ -211,18 +205,18 @@ fun DownloadsScreen(
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
                         .clip(RoundedCornerShape(10.dp)),
-                    color = SuzieeSurfaceCard,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder)
+                    color = SuzieeTheme.colors.surfaceCard,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border)
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         Text(
                             text = "Couldn't download this track",
-                            color = SuzieeTextPrimary,
+                            color = SuzieeTheme.colors.textPrimary,
                             fontSize = 13.sp
                         )
                         Text(
                             text = d.errorMessage ?: "Network error",
-                            color = SuzieeTextMuted,
+                            color = SuzieeTheme.colors.textMuted,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 2,
                             modifier = Modifier.padding(top = 2.dp)
@@ -234,7 +228,7 @@ fun DownloadsScreen(
                         ) {
                             Text(
                                 text = "Retry",
-                                color = SuzieeAccentSecondary,
+                                color = SuzieeTheme.colors.accentSecondary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier
@@ -248,7 +242,7 @@ fun DownloadsScreen(
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Dismiss",
-                                    tint = SuzieeTextMuted
+                                    tint = SuzieeTheme.colors.textMuted
                                 )
                             }
                         }
@@ -268,20 +262,20 @@ fun DownloadsScreen(
                 ) {
                     Text(
                         text = "No downloaded tracks yet.",
-                        color = SuzieeTextPrimary,
+                        color = SuzieeTheme.colors.textPrimary,
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
                         text = "Search for songs online and choose 'Download' from the track options.",
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
                     )
                     Button(
                         onClick = onNavigateToSearch,
-                        colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary)
+                        colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
                     ) {
-                        Text("Search Music", color = SuzieeBgPrimary)
+                        Text("Search Music", color = SuzieeTheme.colors.bgPrimary)
                     }
                 }
             }
@@ -312,7 +306,7 @@ fun DownloadsScreen(
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = "Delete download",
-                            tint = SuzieeTextMuted
+                            tint = SuzieeTheme.colors.textMuted
                         )
                     }
                 }

@@ -91,8 +91,18 @@ class SuzieeMediaService : MediaSessionService() {
                     )
                 )
             }
-            mediaSession = builder.build()
-            Log.i(TAG, "MediaSession created - notification/lock-screen controls active")
+            val session = builder.build()
+            mediaSession = session
+            // Register the session with this service immediately. Media3 only adds a session
+            // to its notification manager when a controller connects (or when onGetSession
+            // returns it). This app drives ExoPlayer directly and never creates a
+            // MediaController, so without this call the service runs, the platform sees the
+            // media session, but Media3 never posts the playback notification.
+            addSession(session)
+            Log.i(
+                TAG,
+                "MediaSession created and registered - notification/lock-screen controls active"
+            )
 
             // Metadata synchronisation evidence. Media3 renders the notification from the
             // active MediaItem, and every item MusicPlayerManager builds is complete before

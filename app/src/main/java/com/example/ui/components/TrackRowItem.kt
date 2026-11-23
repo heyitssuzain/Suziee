@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -45,14 +47,6 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.SuzieeApplication
 import com.example.domain.model.Track
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeSurfaceElevated
-import com.example.ui.theme.SuzieeTextMuted
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
-
 @Composable
 fun TrackRowItem(
     track: Track,
@@ -78,7 +72,7 @@ fun TrackRowItem(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (isCurrentTrack) SuzieeSurfaceElevated else androidx.compose.ui.graphics.Color.Transparent)
+            .background(if (isCurrentTrack) SuzieeTheme.colors.surfaceElevated else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("track_row_${track.id}"),
@@ -89,7 +83,7 @@ fun TrackRowItem(
             modifier = Modifier
                 .size(52.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(SuzieeSurfaceElevated),
+                .background(SuzieeTheme.colors.surfaceElevated),
             contentAlignment = Alignment.Center
         ) {
             if (track.artworkUrl.isNotBlank()) {
@@ -103,7 +97,7 @@ fun TrackRowItem(
                 Icon(
                     imageVector = Icons.Default.MusicNote,
                     contentDescription = null,
-                    tint = SuzieeTextMuted,
+                    tint = SuzieeTheme.colors.textMuted,
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -112,13 +106,13 @@ fun TrackRowItem(
                 Box(
                     modifier = Modifier
                         .matchParentSize()
-                        .background(SuzieeAccentPrimary.copy(alpha = 0.35f)),
+                        .background(SuzieeTheme.colors.accentPrimary.copy(alpha = 0.35f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.MusicNote,
                         contentDescription = "Playing",
-                        tint = SuzieeAccentSecondary,
+                        tint = SuzieeTheme.colors.accentSecondary,
                         modifier = Modifier.size(22.dp)
                     )
                 }
@@ -133,7 +127,7 @@ fun TrackRowItem(
         ) {
             Text(
                 text = track.title,
-                color = if (isCurrentTrack) SuzieeAccentSecondary else SuzieeTextPrimary,
+                color = if (isCurrentTrack) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontWeight = if (isCurrentTrack) FontWeight.Bold else FontWeight.Medium
                 ),
@@ -145,7 +139,7 @@ fun TrackRowItem(
             ) {
                 Text(
                     text = track.artist,
-                    color = SuzieeTextSecondary,
+                    color = SuzieeTheme.colors.textSecondary,
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -154,7 +148,7 @@ fun TrackRowItem(
                 if (track.durationSeconds > 0) {
                     Text(
                         text = " • ${track.formattedDuration}",
-                        color = SuzieeTextMuted,
+                        color = SuzieeTheme.colors.textMuted,
                         fontSize = 12.sp
                     )
                 }
@@ -170,7 +164,7 @@ fun TrackRowItem(
                 Icon(
                     imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                     contentDescription = if (track.isFavorite) "Remove from favorites" else "Add to favorites",
-                    tint = if (track.isFavorite) SuzieeAccentPrimary else SuzieeTextMuted,
+                    tint = if (track.isFavorite) SuzieeTheme.colors.accentPrimary else SuzieeTheme.colors.textMuted,
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -192,7 +186,7 @@ fun TrackRowItem(
                 )
                 Text(
                     text = "${downloadStatus.percent}%",
-                    color = SuzieeAccentSecondary,
+                    color = SuzieeTheme.colors.accentSecondary,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(start = 2.dp)
                 )
@@ -208,7 +202,7 @@ fun TrackRowItem(
                 Icon(
                     imageVector = Icons.Default.MoreVert,
                     contentDescription = "Track options",
-                    tint = SuzieeTextMuted,
+                    tint = SuzieeTheme.colors.textMuted,
                     modifier = Modifier.size(20.dp)
                 )
             }

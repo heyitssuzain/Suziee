@@ -1,8 +1,11 @@
 package com.example.ui.settings
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,11 +14,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Animation
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
@@ -39,20 +45,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.preferences.SuzieePreferences
 import com.example.data.repository.MusicRepository
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeSurfaceCard
-import com.example.ui.theme.SuzieeTextMuted
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
+import com.example.ui.theme.SuzieeThemeId
+import com.example.ui.theme.ThemedCard
+import com.example.ui.theme.suzieeColorsFor
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -67,19 +70,21 @@ fun SettingsScreen(
     val isReducedMotion by preferences.isReducedMotion.collectAsState(initial = false)
     val isAutoplay by preferences.isAutoplayEnabled.collectAsState(initial = true)
     val voiceLang by preferences.voiceLanguage.collectAsState(initial = "en-US")
+    val themeKey by preferences.themeId.collectAsState(initial = "aurora_glass")
+    val activeTheme = SuzieeThemeId.fromKey(themeKey)
     val scope = rememberCoroutineScope()
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(SuzieeBgPrimary)
+            .background(SuzieeTheme.colors.bgPrimary)
             .testTag("settings_screen")
     ) {
         TopAppBar(
             title = {
                 Text(
                     text = "Settings",
-                    color = SuzieeTextPrimary,
+                    color = SuzieeTheme.colors.textPrimary,
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                 )
             },
@@ -88,19 +93,93 @@ fun SettingsScreen(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
-                        tint = SuzieeTextPrimary
+                        tint = SuzieeTheme.colors.textPrimary
                     )
                 }
             },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = SuzieeBgPrimary)
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = SuzieeTheme.colors.bgPrimary)
         )
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
         ) {
+            // Theme engine
+            item {
+                SettingsSectionHeader("THEME")
+                SettingsCard {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        SuzieeThemeId.entries.forEach { id ->
+                            val palette = suzieeColorsFor(id)
+                            val selected = id == activeTheme
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(
+                                        if (selected) palette.accentPrimary.copy(alpha = 0.12f)
+                                        else Color.Transparent
+                                    )
+                                    .clickable {
+                                        scope.launch { preferences.setThemeId(id.storageKey) }
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 10.dp)
+                                    .testTag("theme_${id.storageKey}"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.linearGradient(
+                                                listOf(
+                                                    palette.accentPrimary,
+                                                    palette.accentSecondary
+                                                )
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .clip(CircleShape)
+                                            .background(palette.bgPrimary.copy(alpha = 0.8f))
+                                    )
+                                }
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(start = 12.dp)
+                                ) {
+                                    Text(
+                                        text = id.label,
+                                        color = SuzieeTheme.colors.textPrimary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = id.tagline,
+                                        color = SuzieeTheme.colors.textSecondary,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                if (selected) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Selected theme",
+                                        tint = palette.accentPrimary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Appearance section
             item {
+                Spacer(modifier = Modifier.height(16.dp))
                 SettingsSectionHeader("APPEARANCE")
                 SettingsCard {
                     Column {
@@ -112,16 +191,16 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Animation, contentDescription = null, tint = SuzieeAccentSecondary)
+                                Icon(Icons.Default.Animation, contentDescription = null, tint = SuzieeTheme.colors.accentSecondary)
                                 Column(modifier = Modifier.padding(start = 12.dp)) {
-                                    Text("Reduced Motion", color = SuzieeTextPrimary, fontWeight = FontWeight.Medium)
-                                    Text("Skip intro animations and reduce dynamic motion", color = SuzieeTextSecondary, fontSize = 12.sp)
+                                    Text("Reduced Motion", color = SuzieeTheme.colors.textPrimary, fontWeight = FontWeight.Medium)
+                                    Text("Skip intro animations and reduce dynamic motion", color = SuzieeTheme.colors.textSecondary, fontSize = 12.sp)
                                 }
                             }
                             Switch(
                                 checked = isReducedMotion,
                                 onCheckedChange = { scope.launch { preferences.setReducedMotion(it) } },
-                                colors = SwitchDefaults.colors(checkedThumbColor = SuzieeBgPrimary, checkedTrackColor = SuzieeAccentPrimary)
+                                colors = SwitchDefaults.colors(checkedThumbColor = SuzieeTheme.colors.bgPrimary, checkedTrackColor = SuzieeTheme.colors.accentPrimary)
                             )
                         }
 
@@ -132,10 +211,10 @@ fun SettingsScreen(
                                 .padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Movie, contentDescription = null, tint = SuzieeAccentPrimary)
+                            Icon(Icons.Default.Movie, contentDescription = null, tint = SuzieeTheme.colors.accentPrimary)
                             Column(modifier = Modifier.padding(start = 12.dp)) {
-                                Text("Replay Cinematic Intro", color = SuzieeTextPrimary, fontWeight = FontWeight.Medium)
-                                Text("Watch the animated Suziee opening again", color = SuzieeTextSecondary, fontSize = 12.sp)
+                                Text("Replay Cinematic Intro", color = SuzieeTheme.colors.textPrimary, fontWeight = FontWeight.Medium)
+                                Text("Watch the animated Suziee opening again", color = SuzieeTheme.colors.textSecondary, fontSize = 12.sp)
                             }
                         }
                     }
@@ -155,16 +234,16 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = SuzieeAccentPrimary)
+                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = SuzieeTheme.colors.accentPrimary)
                             Column(modifier = Modifier.padding(start = 12.dp)) {
-                                Text("Autoplay Next Track", color = SuzieeTextPrimary, fontWeight = FontWeight.Medium)
-                                Text("Automatically play subsequent songs in queue", color = SuzieeTextSecondary, fontSize = 12.sp)
+                                Text("Autoplay Next Track", color = SuzieeTheme.colors.textPrimary, fontWeight = FontWeight.Medium)
+                                Text("Automatically play subsequent songs in queue", color = SuzieeTheme.colors.textSecondary, fontSize = 12.sp)
                             }
                         }
                         Switch(
                             checked = isAutoplay,
                             onCheckedChange = { scope.launch { preferences.setAutoplayEnabled(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = SuzieeBgPrimary, checkedTrackColor = SuzieeAccentPrimary)
+                            colors = SwitchDefaults.colors(checkedThumbColor = SuzieeTheme.colors.bgPrimary, checkedTrackColor = SuzieeTheme.colors.accentPrimary)
                         )
                     }
                 }
@@ -177,10 +256,10 @@ fun SettingsScreen(
                 SettingsCard {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Language, contentDescription = null, tint = SuzieeAccentSecondary)
+                            Icon(Icons.Default.Language, contentDescription = null, tint = SuzieeTheme.colors.accentSecondary)
                             Text(
                                 text = "Preferred Voice Language",
-                                color = SuzieeTextPrimary,
+                                color = SuzieeTheme.colors.textPrimary,
                                 fontWeight = FontWeight.Medium,
                                 modifier = Modifier.padding(start = 12.dp)
                             )
@@ -191,13 +270,13 @@ fun SettingsScreen(
                                 val selected = voiceLang == code
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = if (selected) SuzieeAccentPrimary else SuzieeBgPrimary,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) SuzieeAccentPrimary else SuzieeBorder),
+                                    color = if (selected) SuzieeTheme.colors.accentPrimary else SuzieeTheme.colors.bgPrimary,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) SuzieeTheme.colors.accentPrimary else SuzieeTheme.colors.border),
                                     modifier = Modifier.clickable { scope.launch { preferences.setVoiceLanguage(code) } }
                                 ) {
                                     Text(
                                         text = label,
-                                        color = if (selected) SuzieeBgPrimary else SuzieeTextPrimary,
+                                        color = if (selected) SuzieeTheme.colors.bgPrimary else SuzieeTheme.colors.textPrimary,
                                         fontSize = 12.sp,
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
@@ -222,10 +301,10 @@ fun SettingsScreen(
                                 .padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.CleaningServices, contentDescription = null, tint = SuzieeAccentPrimary)
+                            Icon(Icons.Default.CleaningServices, contentDescription = null, tint = SuzieeTheme.colors.accentPrimary)
                             Column(modifier = Modifier.padding(start = 12.dp)) {
-                                Text("Clear Playback History", color = SuzieeTextPrimary, fontWeight = FontWeight.Medium)
-                                Text("Delete recent playback logs from local device", color = SuzieeTextSecondary, fontSize = 12.sp)
+                                Text("Clear Playback History", color = SuzieeTheme.colors.textPrimary, fontWeight = FontWeight.Medium)
+                                Text("Delete recent playback logs from local device", color = SuzieeTheme.colors.textSecondary, fontSize = 12.sp)
                             }
                         }
                     }
@@ -239,10 +318,10 @@ fun SettingsScreen(
                 SettingsCard {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Info, contentDescription = null, tint = SuzieeAccentSecondary)
+                            Icon(Icons.Default.Info, contentDescription = null, tint = SuzieeTheme.colors.accentSecondary)
                             Text(
                                 text = "Suziee Music Player v1.0",
-                                color = SuzieeTextPrimary,
+                                color = SuzieeTheme.colors.textPrimary,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(start = 12.dp)
                             )
@@ -250,14 +329,14 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "Premium anime music player built with Kotlin, Jetpack Compose, Media3 ExoPlayer, InnerTubeX architecture, Room database, and LRCLIB synchronized lyrics.",
-                            color = SuzieeTextSecondary,
+                            color = SuzieeTheme.colors.textSecondary,
                             fontSize = 13.sp,
                             lineHeight = 18.sp
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "No tracking, no mandatory accounts, pure anime music experience.",
-                            color = SuzieeTextMuted,
+                            color = SuzieeTheme.colors.textMuted,
                             fontSize = 12.sp
                         )
                     }
@@ -272,7 +351,7 @@ fun SettingsScreen(
 fun SettingsSectionHeader(title: String) {
     Text(
         text = title,
-        color = SuzieeAccentSecondary,
+        color = SuzieeTheme.colors.accentSecondary,
         fontSize = 11.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = 1.5.sp,
@@ -282,12 +361,10 @@ fun SettingsSectionHeader(title: String) {
 
 @Composable
 fun SettingsCard(content: @Composable () -> Unit) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp)),
-        color = SuzieeSurfaceCard,
-        border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder),
-        content = content
-    )
+    ThemedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        content()
+    }
 }

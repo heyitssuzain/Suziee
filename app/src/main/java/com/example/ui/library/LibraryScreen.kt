@@ -1,5 +1,7 @@
 package com.example.ui.library
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +25,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
@@ -59,15 +62,6 @@ import com.example.domain.model.Playlist
 import com.example.domain.model.Track
 import com.example.playback.MusicPlayerManager
 import com.example.ui.components.TrackRowItem
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeSurfaceCard
-import com.example.ui.theme.SuzieeSurfaceElevated
-import com.example.ui.theme.SuzieeTextMuted
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
 import kotlinx.coroutines.launch
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -76,6 +70,7 @@ fun LibraryScreen(
     playerManager: MusicPlayerManager,
     onTrackOptions: (Track) -> Unit,
     onDownloadTrack: (Track) -> Unit,
+    onOpenImportPlaylist: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -93,7 +88,7 @@ fun LibraryScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(SuzieeBgPrimary)
+            .background(SuzieeTheme.colors.bgPrimary)
             .testTag("library_screen")
     ) {
         // Library Title & New Playlist button
@@ -106,20 +101,34 @@ fun LibraryScreen(
         ) {
             Text(
                 text = "Your Library",
-                color = SuzieeTextPrimary,
+                color = SuzieeTheme.colors.textPrimary,
                 style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
             )
 
-            if (selectedTab == 0 && selectedPlaylistForDetail == null) {
-                IconButton(
-                    onClick = { showCreatePlaylistDialog = true },
-                    modifier = Modifier.testTag("new_playlist_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = "Create Playlist",
-                        tint = SuzieeAccentSecondary
-                    )
+            if (selectedPlaylistForDetail == null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onOpenImportPlaylist,
+                        modifier = Modifier.testTag("library_import_playlist_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlaylistAdd,
+                            contentDescription = "Import playlist",
+                            tint = SuzieeTheme.colors.accentPrimary
+                        )
+                    }
+                    if (selectedTab == 0) {
+                        IconButton(
+                            onClick = { showCreatePlaylistDialog = true },
+                            modifier = Modifier.testTag("new_playlist_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Create Playlist",
+                                tint = SuzieeTheme.colors.accentSecondary
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -128,12 +137,12 @@ fun LibraryScreen(
         if (selectedPlaylistForDetail == null) {
             SecondaryTabRow(
                 selectedTabIndex = selectedTab,
-                containerColor = SuzieeBgPrimary,
-                contentColor = SuzieeAccentSecondary,
+                containerColor = SuzieeTheme.colors.bgPrimary,
+                contentColor = SuzieeTheme.colors.accentSecondary,
                 indicator = {
                     TabRowDefaults.SecondaryIndicator(
                         modifier = Modifier.tabIndicatorOffset(selectedTab),
-                        color = SuzieeAccentSecondary
+                        color = SuzieeTheme.colors.accentSecondary
                     )
                 }
             ) {
@@ -144,7 +153,7 @@ fun LibraryScreen(
                         text = {
                             Text(
                                 text = title,
-                                color = if (selectedTab == index) SuzieeAccentSecondary else SuzieeTextSecondary,
+                                color = if (selectedTab == index) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textSecondary,
                                 fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
                             )
                         }
@@ -218,7 +227,7 @@ fun LibraryScreen(
                                             .fillMaxWidth()
                                             .padding(vertical = 6.dp)
                                             .clip(RoundedCornerShape(12.dp))
-                                            .background(SuzieeSurfaceElevated)
+                                            .background(SuzieeTheme.colors.surfaceElevated)
                                             .clickable { selectedPlaylistForDetail = playlist }
                                             .padding(14.dp),
                                         verticalAlignment = Alignment.CenterVertically
@@ -227,25 +236,25 @@ fun LibraryScreen(
                                             modifier = Modifier
                                                 .size(48.dp)
                                                 .clip(RoundedCornerShape(8.dp))
-                                                .background(SuzieeBorder),
+                                                .background(SuzieeTheme.colors.border),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.PlaylistPlay,
                                                 contentDescription = null,
-                                                tint = SuzieeAccentPrimary,
+                                                tint = SuzieeTheme.colors.accentPrimary,
                                                 modifier = Modifier.size(28.dp)
                                             )
                                         }
                                         Column(modifier = Modifier.weight(1f).padding(start = 14.dp)) {
                                             Text(
                                                 text = playlist.name,
-                                                color = SuzieeTextPrimary,
+                                                color = SuzieeTheme.colors.textPrimary,
                                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                                             )
                                             Text(
                                                 text = "Playlist",
-                                                color = SuzieeTextSecondary,
+                                                color = SuzieeTheme.colors.textSecondary,
                                                 style = MaterialTheme.typography.bodySmall
                                             )
                                         }
@@ -275,10 +284,10 @@ fun LibraryScreen(
                                     ) {
                                         Button(
                                             onClick = { playerManager.playTrack(favorites.first(), favorites) },
-                                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary)
+                                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
                                         ) {
-                                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = SuzieeBgPrimary)
-                                            Text("Play All (${favorites.size})", color = SuzieeBgPrimary)
+                                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = SuzieeTheme.colors.bgPrimary)
+                                            Text("Play All (${favorites.size})", color = SuzieeTheme.colors.bgPrimary)
                                         }
                                     }
                                 }
@@ -323,11 +332,11 @@ fun LibraryScreen(
                                     ) {
                                         Text(
                                             text = "Recent Tracks",
-                                            color = SuzieeTextSecondary,
+                                            color = SuzieeTheme.colors.textSecondary,
                                             style = MaterialTheme.typography.labelMedium
                                         )
                                         TextButton(onClick = { scope.launch { playerManager.repository.clearHistory() } }) {
-                                            Text("Clear History", color = SuzieeTextMuted)
+                                            Text("Clear History", color = SuzieeTheme.colors.textMuted)
                                         }
                                     }
                                 }
@@ -357,12 +366,12 @@ fun LibraryScreen(
         Dialog(onDismissRequest = { showCreatePlaylistDialog = false }) {
             Surface(
                 shape = RoundedCornerShape(20.dp),
-                color = SuzieeSurfaceCard,
-                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder),
+                color = SuzieeTheme.colors.surfaceCard,
+                border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border),
                 modifier = Modifier.padding(16.dp)
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
-                    Text("New Playlist", color = SuzieeTextPrimary, style = MaterialTheme.typography.titleLarge)
+                    Text("New Playlist", color = SuzieeTheme.colors.textPrimary, style = MaterialTheme.typography.titleLarge)
                     Spacer(modifier = Modifier.height(14.dp))
                     OutlinedTextField(
                         value = name,
@@ -370,10 +379,10 @@ fun LibraryScreen(
                         placeholder = { Text("Playlist name") },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = SuzieeAccentSecondary,
-                            unfocusedBorderColor = SuzieeBorder,
-                            focusedTextColor = SuzieeTextPrimary,
-                            unfocusedTextColor = SuzieeTextPrimary
+                            focusedBorderColor = SuzieeTheme.colors.accentSecondary,
+                            unfocusedBorderColor = SuzieeTheme.colors.border,
+                            focusedTextColor = SuzieeTheme.colors.textPrimary,
+                            unfocusedTextColor = SuzieeTheme.colors.textPrimary
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -383,7 +392,7 @@ fun LibraryScreen(
                         horizontalArrangement = Arrangement.End
                     ) {
                         TextButton(onClick = { showCreatePlaylistDialog = false }) {
-                            Text("Cancel", color = SuzieeTextSecondary)
+                            Text("Cancel", color = SuzieeTheme.colors.textSecondary)
                         }
                         Button(
                             onClick = {
@@ -394,9 +403,9 @@ fun LibraryScreen(
                                     }
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary)
+                            colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
                         ) {
-                            Text("Create", color = SuzieeBgPrimary)
+                            Text("Create", color = SuzieeTheme.colors.bgPrimary)
                         }
                     }
                 }
@@ -432,21 +441,21 @@ fun PlaylistDetailView(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(onClick = onBack) {
-                    Text("← All Playlists", color = SuzieeAccentSecondary)
+                    Text("← All Playlists", color = SuzieeTheme.colors.accentSecondary)
                 }
                 IconButton(onClick = onDeletePlaylist) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete Playlist", tint = SuzieeTextMuted)
+                    Icon(Icons.Default.Delete, contentDescription = "Delete Playlist", tint = SuzieeTheme.colors.textMuted)
                 }
             }
 
             Text(
                 text = playlist.name,
-                color = SuzieeTextPrimary,
+                color = SuzieeTheme.colors.textPrimary,
                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
             )
             Text(
                 text = "${tracks.size} tracks",
-                color = SuzieeTextSecondary,
+                color = SuzieeTheme.colors.textSecondary,
                 style = MaterialTheme.typography.bodyMedium
             )
 
@@ -456,17 +465,17 @@ fun PlaylistDetailView(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = onPlayAll,
-                        colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary)
+                        colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = SuzieeBgPrimary)
-                        Text("Play", color = SuzieeBgPrimary, modifier = Modifier.padding(start = 4.dp))
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = SuzieeTheme.colors.bgPrimary)
+                        Text("Play", color = SuzieeTheme.colors.bgPrimary, modifier = Modifier.padding(start = 4.dp))
                     }
                     Button(
                         onClick = onShuffle,
-                        colors = ButtonDefaults.buttonColors(containerColor = SuzieeSurfaceElevated)
+                        colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.surfaceElevated)
                     ) {
-                        Icon(Icons.Default.Shuffle, contentDescription = null, tint = SuzieeTextPrimary)
-                        Text("Shuffle", color = SuzieeTextPrimary, modifier = Modifier.padding(start = 4.dp))
+                        Icon(Icons.Default.Shuffle, contentDescription = null, tint = SuzieeTheme.colors.textPrimary)
+                        Text("Shuffle", color = SuzieeTheme.colors.textPrimary, modifier = Modifier.padding(start = 4.dp))
                     }
                 }
             }
@@ -478,7 +487,7 @@ fun PlaylistDetailView(
             item {
                 Text(
                     text = "No tracks in this playlist yet. Search online and tap 'Add to Playlist'!",
-                    color = SuzieeTextMuted,
+                    color = SuzieeTheme.colors.textMuted,
                     modifier = Modifier.padding(vertical = 24.dp)
                 )
             }
@@ -514,16 +523,16 @@ fun EmptyLibraryState(
     ) {
         Text(
             text = message,
-            color = SuzieeTextSecondary,
+            color = SuzieeTheme.colors.textSecondary,
             style = MaterialTheme.typography.bodyLarge
         )
         if (buttonText.isNotBlank()) {
             Spacer(modifier = Modifier.height(14.dp))
             Button(
                 onClick = onAction,
-                colors = ButtonDefaults.buttonColors(containerColor = SuzieeAccentPrimary)
+                colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
             ) {
-                Text(buttonText, color = SuzieeBgPrimary)
+                Text(buttonText, color = SuzieeTheme.colors.bgPrimary)
             }
         }
     }

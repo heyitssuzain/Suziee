@@ -213,8 +213,8 @@ jobs:
             SIGN_NOTE="**Warning:** this build is debug-signed, because the private signing key is not configured yet."
           fi
 
-          TAG="v1.2-build-${GITHUB_RUN_NUMBER}"
-          BODY="**Suziee v1.2** - anime music player for Android.
+          TAG="v1.3-build-${GITHUB_RUN_NUMBER}"
+          BODY="**Suziee v1.3** - anime music player for Android.
 
           ### Download
           Tap **Suziee.apk** under *Assets* below.
@@ -229,7 +229,7 @@ jobs:
           Built automatically from commit \`${GITHUB_SHA:0:7}\` (workflow run #${GITHUB_RUN_NUMBER})."
 
           gh release create "$TAG" "$APK" \
-            --title "Suziee v1.2 (build ${GITHUB_RUN_NUMBER})" \
+            --title "Suziee v1.3 (build ${GITHUB_RUN_NUMBER})" \
             --notes "$BODY" \
             --latest
 

@@ -1,5 +1,7 @@
 package com.example.ui.player
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -74,19 +76,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -98,20 +102,11 @@ import com.example.playback.MusicPlayerManager
 import com.example.playback.RepeatMode as PlaybackRepeatMode
 import com.example.ui.components.WaveformVisualizer
 import com.example.ui.components.rememberDownloadUiStatus
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeBgSecondary
-import com.example.ui.theme.SuzieeBorder
-import com.example.ui.theme.SuzieeHighlight
-import com.example.ui.theme.SuzieeSurfaceCard
-import com.example.ui.theme.SuzieeSurfaceElevated
-import com.example.ui.theme.SuzieeTextMuted
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
+import com.example.ui.theme.AuroraBackground
+import com.example.ui.theme.SystemBarsVisibility
+import com.example.ui.theme.rememberDominantColor
 import kotlinx.coroutines.launch
 import java.util.Locale
-import kotlin.math.abs
 
 @Composable
 fun PlayerScreen(
@@ -131,6 +126,10 @@ fun PlayerScreen(
     val isFavorite by playerManager.repository.isFavorite(track.id).collectAsState(initial = false)
     val downloadStatus = rememberDownloadUiStatus(track.id)
     val scope = rememberCoroutineScope()
+    val dominantColor = rememberDominantColor(track.artworkUrl)
+
+    // The player owns the whole window; hide the bars until the user swipes them back.
+    SystemBarsVisibility(hideBars = true, useDarkIcons = !SuzieeTheme.colors.isDark)
 
     var showLyrics by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
@@ -159,32 +158,44 @@ fun PlayerScreen(
     val duration = playbackState.durationMs.coerceAtLeast(1L)
     val sliderValue = currentPosition.toFloat().coerceIn(0f, duration.toFloat())
 
-    // Rotating vinyl effect
-    val infiniteTransition = rememberInfiniteTransition(label = "vinyl_rotate")
-    val rotationAngle by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(22000, easing = LinearEasing),
-            repeatMode = AnimRepeatMode.Restart
-        ),
-        label = "rotation"
-    )
-
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        SuzieeBgSecondary,
-                        SuzieeBgPrimary,
-                        Color(0xFF07080E)
-                    )
-                )
-            )
             .testTag("full_player_screen")
     ) {
+        // High-resolution artwork becomes the room: blurred, darkened, and lit by its own
+        // dominant colour. The cover itself stays sharp in the centre of the screen.
+        AuroraBackground(
+            dominantColor = dominantColor,
+            modifier = Modifier.fillMaxSize(),
+            isPlaying = playbackState.isPlaying,
+            intensity = 1.15f
+        )
+        if (track.artworkUrl.isNotBlank()) {
+            AsyncImage(
+                model = track.artworkUrl,
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(64.dp)
+                    .alpha(0.52f),
+                contentScale = ContentScale.Crop
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            SuzieeTheme.colors.bgPrimary.copy(alpha = 0.52f),
+                            SuzieeTheme.colors.bgPrimary.copy(alpha = 0.76f),
+                            SuzieeTheme.colors.bgPrimary.copy(alpha = 0.94f)
+                        )
+                    )
+                )
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -201,26 +212,29 @@ fun PlayerScreen(
             ) {
                 IconButton(
                     onClick = onMinimize,
-                    modifier = Modifier.testTag("player_minimize_button")
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(SuzieeTheme.colors.surfaceElevated.copy(alpha = 0.55f))
+                        .testTag("player_minimize_button")
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Minimize Player",
-                        tint = SuzieeTextPrimary
+                        tint = SuzieeTheme.colors.textPrimary
                     )
                 }
 
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "PLAYING FROM SUZIEE",
-                        color = SuzieeAccentSecondary,
+                        color = SuzieeTheme.colors.accentSecondary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 2.sp
                     )
                     Text(
                         text = if (track.isDownloaded) "Offline Playback" else "High-Res Stream",
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         fontSize = 12.sp
                     )
                 }
@@ -231,12 +245,15 @@ fun PlayerScreen(
                             showQueue = !showQueue
                             if (showQueue) showLyrics = false
                         },
-                        modifier = Modifier.testTag("player_queue_toggle")
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(SuzieeTheme.colors.surfaceElevated.copy(alpha = 0.55f))
+                            .testTag("player_queue_toggle")
                     ) {
                         Icon(
                             imageVector = Icons.Default.QueueMusic,
                             contentDescription = "Queue",
-                            tint = if (showQueue) SuzieeAccentSecondary else SuzieeTextSecondary
+                            tint = if (showQueue) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textSecondary
                         )
                     }
                     IconButton(
@@ -244,12 +261,15 @@ fun PlayerScreen(
                             showLyrics = !showLyrics
                             if (showLyrics) showQueue = false
                         },
-                        modifier = Modifier.testTag("player_lyrics_toggle")
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(SuzieeTheme.colors.surfaceElevated.copy(alpha = 0.55f))
+                            .testTag("player_lyrics_toggle")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Lyrics,
                             contentDescription = "Lyrics",
-                            tint = if (showLyrics) SuzieeAccentSecondary else SuzieeTextSecondary
+                            tint = if (showLyrics) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textSecondary
                         )
                     }
                 }
@@ -299,8 +319,8 @@ fun PlayerScreen(
                                     .background(
                                         Brush.radialGradient(
                                             listOf(
-                                                SuzieeAccentPrimary.copy(alpha = 0.28f),
-                                                SuzieeAccentSecondary.copy(alpha = 0.08f),
+                                                SuzieeTheme.colors.accentPrimary.copy(alpha = 0.28f),
+                                                SuzieeTheme.colors.accentSecondary.copy(alpha = 0.08f),
                                                 Color.Transparent
                                             )
                                         )
@@ -312,8 +332,8 @@ fun PlayerScreen(
                                 modifier = Modifier
                                     .fillMaxSize(0.9f)
                                     .clip(RoundedCornerShape(28.dp))
-                                    .border(2.dp, SuzieeBorder, RoundedCornerShape(28.dp))
-                                    .background(SuzieeSurfaceElevated),
+                                    .border(2.dp, SuzieeTheme.colors.border, RoundedCornerShape(28.dp))
+                                    .background(SuzieeTheme.colors.surfaceElevated),
                                 contentAlignment = Alignment.Center
                             ) {
                                 if (track.artworkUrl.isNotBlank()) {
@@ -327,7 +347,7 @@ fun PlayerScreen(
                                     Icon(
                                         imageVector = Icons.Default.MusicNote,
                                         contentDescription = null,
-                                        tint = SuzieeAccentPrimary,
+                                        tint = SuzieeTheme.colors.accentPrimary,
                                         modifier = Modifier.size(64.dp)
                                     )
                                 }
@@ -348,14 +368,14 @@ fun PlayerScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = track.title,
-                        color = SuzieeTextPrimary,
+                        color = SuzieeTheme.colors.textPrimary,
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = track.artist,
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         style = MaterialTheme.typography.bodyLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -374,7 +394,7 @@ fun PlayerScreen(
                         Icon(
                             imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                             contentDescription = "Favorite",
-                            tint = if (isFavorite) SuzieeAccentPrimary else SuzieeTextMuted,
+                            tint = if (isFavorite) SuzieeTheme.colors.accentPrimary else SuzieeTheme.colors.textMuted,
                             modifier = Modifier.size(28.dp)
                         )
                     }
@@ -400,7 +420,7 @@ fun PlayerScreen(
                             Icon(
                                 imageVector = Icons.Default.Download,
                                 contentDescription = "Download",
-                                tint = if (track.isDownloaded) SuzieeAccentSecondary else SuzieeTextMuted,
+                                tint = if (track.isDownloaded) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textMuted,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -430,9 +450,9 @@ fun PlayerScreen(
                     },
                     valueRange = 0f..duration.toFloat(),
                     colors = SliderDefaults.colors(
-                        thumbColor = SuzieeAccentSecondary,
-                        activeTrackColor = SuzieeAccentPrimary,
-                        inactiveTrackColor = SuzieeBorder
+                        thumbColor = SuzieeTheme.colors.accentSecondary,
+                        activeTrackColor = SuzieeTheme.colors.accentPrimary,
+                        inactiveTrackColor = SuzieeTheme.colors.border
                     ),
                     modifier = Modifier.fillMaxWidth().testTag("player_seekbar")
                 )
@@ -443,12 +463,12 @@ fun PlayerScreen(
                 ) {
                     Text(
                         text = formatTime(currentPosition),
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         fontSize = 12.sp
                     )
                     Text(
                         text = formatTime(duration),
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         fontSize = 12.sp
                     )
                 }
@@ -470,7 +490,7 @@ fun PlayerScreen(
                     Icon(
                         imageVector = Icons.Default.Shuffle,
                         contentDescription = "Shuffle",
-                        tint = if (playbackState.isShuffle) SuzieeAccentSecondary else SuzieeTextMuted
+                        tint = if (playbackState.isShuffle) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textMuted
                     )
                 }
 
@@ -482,7 +502,7 @@ fun PlayerScreen(
                     Icon(
                         imageVector = Icons.Default.SkipPrevious,
                         contentDescription = "Previous",
-                        tint = SuzieeTextPrimary,
+                        tint = SuzieeTheme.colors.textPrimary,
                         modifier = Modifier.size(34.dp)
                     )
                 }
@@ -493,7 +513,7 @@ fun PlayerScreen(
                         .size(68.dp)
                         .clip(CircleShape)
                         .background(
-                            Brush.linearGradient(listOf(SuzieeAccentPrimary, SuzieeAccentSecondary))
+                            Brush.linearGradient(listOf(SuzieeTheme.colors.accentPrimary, SuzieeTheme.colors.accentSecondary))
                         )
                         .clickable {
                             if (playbackState.errorMessage != null) {
@@ -507,7 +527,7 @@ fun PlayerScreen(
                 ) {
                     if (playbackState.isLoading) {
                         CircularProgressIndicator(
-                            color = SuzieeBgPrimary,
+                            color = SuzieeTheme.colors.bgPrimary,
                             strokeWidth = 3.dp,
                             modifier = Modifier.size(32.dp)
                         )
@@ -515,14 +535,14 @@ fun PlayerScreen(
                         Icon(
                             imageVector = Icons.Default.Refresh,
                             contentDescription = "Retry",
-                            tint = SuzieeBgPrimary,
+                            tint = SuzieeTheme.colors.bgPrimary,
                             modifier = Modifier.size(34.dp)
                         )
                     } else {
                         Icon(
                             imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = if (playbackState.isPlaying) "Pause" else "Play",
-                            tint = SuzieeBgPrimary,
+                            tint = SuzieeTheme.colors.bgPrimary,
                             modifier = Modifier.size(36.dp)
                         )
                     }
@@ -536,7 +556,7 @@ fun PlayerScreen(
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "Next",
-                        tint = SuzieeTextPrimary,
+                        tint = SuzieeTheme.colors.textPrimary,
                         modifier = Modifier.size(34.dp)
                     )
                 }
@@ -549,7 +569,7 @@ fun PlayerScreen(
                     Icon(
                         imageVector = if (playbackState.repeatMode == PlaybackRepeatMode.ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
                         contentDescription = "Repeat",
-                        tint = if (playbackState.repeatMode != PlaybackRepeatMode.OFF) SuzieeAccentSecondary else SuzieeTextMuted
+                        tint = if (playbackState.repeatMode != PlaybackRepeatMode.OFF) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textMuted
                     )
                 }
             }
@@ -562,7 +582,7 @@ fun PlayerScreen(
                 ) {
                     Text(
                         text = "Cancel",
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         fontSize = 13.sp
                     )
                 }
@@ -665,7 +685,7 @@ fun LyricsView(
                             .background(
                                 Brush.verticalGradient(
                                     listOf(
-                                        SuzieeBgPrimary.copy(alpha = 0.55f),
+                                        SuzieeTheme.colors.bgPrimary.copy(alpha = 0.55f),
                                         Color.Transparent
                                     )
                                 )
@@ -678,7 +698,7 @@ fun LyricsView(
                 }
             }
 
-            else -> PlainLyrics(plainLyrics = lyricsResult.plainLyrics)
+            else -> PlainLyrics(plainLyrics = lyricsResult?.plainLyrics)
         }
     }
 }
@@ -695,10 +715,10 @@ private fun BoxScope.GlassBackdrop(drift: Float, breathe: Float, sheen: Float) {
             .background(
                 Brush.linearGradient(
                     colors = listOf(
-                        SuzieeAccentPrimary.copy(alpha = 0.22f + 0.06f * breathe),
-                        SuzieeSurfaceCard.copy(alpha = 0.60f),
-                        SuzieeBgPrimary.copy(alpha = 0.80f),
-                        SuzieeAccentSecondary.copy(alpha = 0.18f + 0.05f * breathe)
+                        SuzieeTheme.colors.accentPrimary.copy(alpha = 0.22f + 0.06f * breathe),
+                        SuzieeTheme.colors.surfaceCard.copy(alpha = 0.60f),
+                        SuzieeTheme.colors.bgPrimary.copy(alpha = 0.80f),
+                        SuzieeTheme.colors.accentSecondary.copy(alpha = 0.18f + 0.05f * breathe)
                     )
                 )
             )
@@ -709,7 +729,7 @@ private fun BoxScope.GlassBackdrop(drift: Float, breathe: Float, sheen: Float) {
             .align(Alignment.TopStart)
             .offset(x = (-50 + 90 * drift).dp, y = (-40 + 60 * drift).dp),
         size = 250.dp,
-        color = SuzieeAccentPrimary,
+        color = SuzieeTheme.colors.accentPrimary,
         alpha = 0.30f + 0.12f * breathe
     )
     AmbientOrb(
@@ -717,7 +737,7 @@ private fun BoxScope.GlassBackdrop(drift: Float, breathe: Float, sheen: Float) {
             .align(Alignment.BottomEnd)
             .offset(x = (40 - 80 * drift).dp, y = (30 - 50 * drift).dp),
         size = 300.dp,
-        color = SuzieeAccentSecondary,
+        color = SuzieeTheme.colors.accentSecondary,
         alpha = 0.20f + 0.10f * breathe
     )
 
@@ -747,8 +767,8 @@ private fun BoxScope.GlassBackdrop(drift: Float, breathe: Float, sheen: Float) {
                 brush = Brush.linearGradient(
                     listOf(
                         Color.White.copy(alpha = 0.30f),
-                        SuzieeAccentSecondary.copy(alpha = 0.16f),
-                        SuzieeAccentPrimary.copy(alpha = 0.24f),
+                        SuzieeTheme.colors.accentSecondary.copy(alpha = 0.16f),
+                        SuzieeTheme.colors.accentPrimary.copy(alpha = 0.24f),
                         Color.White.copy(alpha = 0.06f)
                     )
                 ),
@@ -833,8 +853,8 @@ private fun LyricsEmptyState() {
                     .background(
                         Brush.linearGradient(
                             listOf(
-                                SuzieeAccentPrimary.copy(alpha = 0.38f),
-                                SuzieeAccentSecondary.copy(alpha = 0.24f)
+                                SuzieeTheme.colors.accentPrimary.copy(alpha = 0.38f),
+                                SuzieeTheme.colors.accentSecondary.copy(alpha = 0.24f)
                             )
                         )
                     )
@@ -844,20 +864,20 @@ private fun LyricsEmptyState() {
                 Icon(
                     imageVector = Icons.Default.Lyrics,
                     contentDescription = null,
-                    tint = SuzieeHighlight,
+                    tint = SuzieeTheme.colors.highlight,
                     modifier = Modifier.size(32.dp)
                 )
             }
             Spacer(modifier = Modifier.height(20.dp))
             Text(
                 text = "Lyrics unavailable",
-                color = SuzieeTextPrimary,
+                color = SuzieeTheme.colors.textPrimary,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = "We couldn't find lyrics for this track yet.",
-                color = SuzieeTextMuted,
+                color = SuzieeTheme.colors.textMuted,
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center
             )
@@ -875,12 +895,12 @@ private fun LyricsHeader(breathe: Float, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .size(7.dp)
                 .clip(CircleShape)
-                .background(SuzieeAccentSecondary.copy(alpha = 0.45f + 0.55f * breathe))
+                .background(SuzieeTheme.colors.accentSecondary.copy(alpha = 0.45f + 0.55f * breathe))
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = "SYNCED LYRICS",
-            color = SuzieeTextSecondary,
+            color = SuzieeTheme.colors.textSecondary,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 2.4.sp
@@ -912,7 +932,7 @@ private fun PlainLyrics(plainLyrics: String?) {
         item {
             Text(
                 text = plainLyrics.orEmpty().trim(),
-                color = SuzieeTextPrimary,
+                color = SuzieeTheme.colors.textPrimary,
                 style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 30.sp),
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
@@ -929,6 +949,24 @@ private fun SyncedLyrics(
 ) {
     val listState = rememberLazyListState()
     val activeIndex = lines.indexOfLast { it.timeMs <= currentPositionMs }.coerceAtLeast(0)
+
+    // LRCLIB gives line-level timing, so each line's duration is shared across its words.
+    // That is enough for a convincing karaoke sweep without a second lyrics provider.
+    val activeStart = lines.getOrNull(activeIndex)?.timeMs ?: 0L
+    val activeEnd = lines.getOrNull(activeIndex + 1)?.timeMs
+        ?: (activeStart + 4_000L)
+    val lineProgress = if (currentPositionMs <= activeStart) {
+        0f
+    } else {
+        ((currentPositionMs - activeStart).toFloat() /
+            (activeEnd - activeStart).coerceAtLeast(1L).toFloat())
+            .coerceIn(0f, 1f)
+    }
+    val nextLineTime = lines.getOrNull(activeIndex + 1)?.timeMs
+    val instrumental = currentPositionMs < (lines.firstOrNull()?.timeMs ?: 0L) ||
+        (nextLineTime != null &&
+            nextLineTime - activeStart > 6_000L &&
+            lineProgress > 0.86f)
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         // Half the panel as vertical padding, minus half a line, so that bringing the active
@@ -952,35 +990,112 @@ private fun SyncedLyrics(
                 LyricLineItem(
                     text = line.text,
                     isActive = index == activeIndex,
-                    distanceFromActive = abs(index - activeIndex),
+                    progress = if (index == activeIndex) lineProgress else 0f,
                     onClick = { onSeek(line.timeMs) }
                 )
             }
         }
+
+        AnimatedVisibility(
+            visible = instrumental,
+            enter = fadeIn(tween(400)),
+            exit = fadeOut(tween(400)),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 18.dp)
+        ) {
+            InstrumentalPulse()
+        }
     }
 }
 
-/** One lyric line: scales up, brightens and gains a halo as it becomes the active line. */
+/** Pulsing waveform shown during intros and long instrumental gaps. */
+@Composable
+private fun InstrumentalPulse() {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        WaveformVisualizer(
+            amplitudes = List(24) { index ->
+                0.28f + ((index * 37) % 100) / 100f * 0.62f
+            },
+            isPlaying = true,
+            height = 24.dp,
+            modifier = Modifier.width(132.dp)
+        )
+        Text(
+            text = "INSTRUMENTAL",
+            color = SuzieeTheme.colors.textMuted,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 2.sp,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+/**
+ * One lyric line with word-by-word karaoke.
+ *
+ * The active line is bold, scaled up, and its words light from left to right as the line's
+ * time window elapses. Inactive lines stay at 0.3 alpha so the current lyric always wins.
+ */
 @Composable
 private fun LyricLineItem(
     text: String,
     isActive: Boolean,
-    distanceFromActive: Int,
+    progress: Float,
     onClick: () -> Unit
 ) {
+    val colors = SuzieeTheme.colors
     val activation by animateFloatAsState(
         targetValue = if (isActive) 1f else 0f,
         animationSpec = tween(durationMillis = 520, easing = FastOutSlowInEasing),
         label = "line_activation"
     )
 
-    // Neighbouring lines stay readable but recede, pulling the eye to the active line.
-    val ambientFade = when (distanceFromActive) {
-        0 -> 1f
-        1 -> 0.70f
-        2 -> 0.50f
-        3 -> 0.34f
-        else -> 0.22f
+    val tokens = remember(text) {
+        Regex("""\S+""").findAll(text).map { it.value }.toList()
+    }
+    val activeWord = if (isActive) {
+        (progress * tokens.size).toInt().coerceIn(0, (tokens.size - 1).coerceAtLeast(0))
+    } else {
+        -1
+    }
+    val annotated = remember(text, isActive, activeWord) {
+        buildAnnotatedString {
+            var cursor = 0
+            tokens.forEachIndexed { index, token ->
+                val start = text.indexOf(token, cursor).let { if (it < 0) cursor else it }
+                if (start > cursor) append(text.substring(cursor, start))
+                val isCurrent = isActive && index == activeWord
+                val isSung = isActive && index < activeWord
+                withStyle(
+                    SpanStyle(
+                        color = when {
+                            isCurrent -> colors.highlight
+                            isSung -> colors.textPrimary
+                            else -> colors.textMuted.copy(alpha = 0.62f)
+                        },
+                        fontWeight = when {
+                            isCurrent -> FontWeight.ExtraBold
+                            isSung -> FontWeight.Bold
+                            else -> FontWeight.Medium
+                        },
+                        shadow = if (isCurrent) {
+                            Shadow(
+                                color = colors.accentSecondary.copy(alpha = 0.75f),
+                                blurRadius = 24f
+                            )
+                        } else {
+                            null
+                        }
+                    )
+                ) {
+                    append(token)
+                }
+                cursor = start + token.length
+            }
+            if (cursor < text.length) append(text.substring(cursor))
+        }
     }
 
     Box(
@@ -992,7 +1107,8 @@ private fun LyricLineItem(
                 val scale = 0.95f + 0.07f * activation
                 scaleX = scale
                 scaleY = scale
-                alpha = ambientFade * (0.55f + 0.45f * activation)
+                // Exactly 0.3 for inactive lines, per the kinetic-lyrics spec.
+                alpha = if (isActive) 1f else 0.3f
                 translationY = (1f - activation) * 14f
             },
         contentAlignment = Alignment.Center
@@ -1004,8 +1120,8 @@ private fun LyricLineItem(
                 .background(
                     brush = Brush.radialGradient(
                         colors = listOf(
-                            SuzieeAccentPrimary.copy(alpha = 0.32f * activation),
-                            SuzieeAccentSecondary.copy(alpha = 0.12f * activation),
+                            SuzieeTheme.colors.accentPrimary.copy(alpha = 0.32f * activation),
+                            SuzieeTheme.colors.accentSecondary.copy(alpha = 0.12f * activation),
                             Color.Transparent
                         )
                     ),
@@ -1015,29 +1131,29 @@ private fun LyricLineItem(
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = text,
-                color = lerp(SuzieeTextMuted, SuzieeHighlight, activation),
+                text = annotated,
                 style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.3.sp,
-                    shadow = Shadow(
-                        color = SuzieeAccentSecondary.copy(alpha = 0.55f * activation),
-                        blurRadius = 20f * activation
-                    )
+                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                    letterSpacing = 0.3.sp
                 ),
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
             )
 
-            // Gradient underline that grows out of the active line.
+            // Gradient underline that fills with the line's progress.
             Box(
                 modifier = Modifier
                     .padding(top = 7.dp)
                     .height(3.dp)
-                    .width((26 + 52 * activation).dp)
+                    .width((26 + 52 * progress).dp)
                     .clip(CircleShape)
                     .background(
-                        Brush.linearGradient(listOf(SuzieeAccentPrimary, SuzieeAccentSecondary))
+                        Brush.linearGradient(
+                            listOf(
+                                SuzieeTheme.colors.accentPrimary,
+                                SuzieeTheme.colors.accentSecondary
+                            )
+                        )
                     )
                     .alpha(activation)
             )
@@ -1056,8 +1172,8 @@ fun QueueView(
         modifier = Modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(20.dp)),
-        color = SuzieeSurfaceCard,
-        border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeBorder)
+        color = SuzieeTheme.colors.surfaceCard,
+        border = androidx.compose.foundation.BorderStroke(1.dp, SuzieeTheme.colors.border)
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(12.dp)
@@ -1065,7 +1181,7 @@ fun QueueView(
             item {
                 Text(
                     text = "PLAYBACK QUEUE (${queue.size})",
-                    color = SuzieeAccentSecondary,
+                    color = SuzieeTheme.colors.accentSecondary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.5.sp,
@@ -1079,21 +1195,21 @@ fun QueueView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (isCurrent) SuzieeSurfaceElevated else Color.Transparent)
+                        .background(if (isCurrent) SuzieeTheme.colors.surfaceElevated else Color.Transparent)
                         .clickable { onTrackSelected(track) }
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         text = "${index + 1}",
-                        color = if (isCurrent) SuzieeAccentSecondary else SuzieeTextMuted,
+                        color = if (isCurrent) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textMuted,
                         fontSize = 13.sp,
                         modifier = Modifier.widthIn(min = 24.dp)
                     )
                     Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
                         Text(
                             text = track.title,
-                            color = if (isCurrent) SuzieeAccentSecondary else SuzieeTextPrimary,
+                            color = if (isCurrent) SuzieeTheme.colors.accentSecondary else SuzieeTheme.colors.textPrimary,
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
                             ),
@@ -1102,7 +1218,7 @@ fun QueueView(
                         )
                         Text(
                             text = track.artist,
-                            color = SuzieeTextSecondary,
+                            color = SuzieeTheme.colors.textSecondary,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 1
                         )

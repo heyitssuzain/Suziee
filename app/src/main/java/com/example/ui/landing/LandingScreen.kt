@@ -1,5 +1,7 @@
 package com.example.ui.landing
 
+import com.example.ui.theme.SuzieeTheme
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -11,7 +13,6 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,29 +42,20 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
 import com.example.ui.components.WaveformVisualizer
-import com.example.ui.theme.SuzieeAccentPrimary
-import com.example.ui.theme.SuzieeAccentSecondary
-import com.example.ui.theme.SuzieeBgPrimary
-import com.example.ui.theme.SuzieeHighlight
-import com.example.ui.theme.SuzieeTextPrimary
-import com.example.ui.theme.SuzieeTextSecondary
+import com.example.ui.home.MikasaHeroArtwork
+import com.example.ui.theme.SystemBarsVisibility
 import kotlinx.coroutines.delay
 
 @Composable
@@ -112,9 +104,12 @@ fun LandingScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(SuzieeBgPrimary)
+            .background(SuzieeTheme.colors.bgPrimary)
             .testTag("landing_screen")
     ) {
+        // The intro is a true full-screen moment: hide both bars and restore them on exit.
+        SystemBarsVisibility(hideBars = true, useDarkIcons = false)
+
         // Background anime artwork with atmospheric gradient overlay
         Box(
             modifier = Modifier
@@ -122,14 +117,11 @@ fun LandingScreen(
                 .alpha(characterAlpha.value)
                 .scale(characterScale.value)
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.img_suziee_hero),
-                contentDescription = "Suziee Character Artwork",
+            MikasaHeroArtwork(
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                // Bias the crop slightly above centre so the character's face stays framed
-                // on tall and wide screens alike.
-                alignment = BiasAlignment(0.5f, 0.4f)
+                reducedMotion = reducedMotion,
+                isPlaying = true,
+                cornerRadius = 0
             )
 
             // Deep gradient overlay ensuring text readability and cyberpunk atmosphere
@@ -139,10 +131,10 @@ fun LandingScreen(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                SuzieeBgPrimary.copy(alpha = 0.45f),
-                                SuzieeBgPrimary.copy(alpha = 0.7f),
-                                SuzieeBgPrimary.copy(alpha = 0.95f),
-                                SuzieeBgPrimary
+                                SuzieeTheme.colors.bgPrimary.copy(alpha = 0.45f),
+                                SuzieeTheme.colors.bgPrimary.copy(alpha = 0.7f),
+                                SuzieeTheme.colors.bgPrimary.copy(alpha = 0.95f),
+                                SuzieeTheme.colors.bgPrimary
                             )
                         )
                     )
@@ -156,7 +148,7 @@ fun LandingScreen(
                     .fillMaxSize()
                     .background(
                         Brush.radialGradient(
-                            colors = listOf(Color.Transparent, SuzieeBgPrimary.copy(alpha = 0.85f)),
+                            colors = listOf(Color.Transparent, SuzieeTheme.colors.bgPrimary.copy(alpha = 0.85f)),
                             radius = 1400f
                         )
                     )
@@ -169,7 +161,7 @@ fun LandingScreen(
                     .background(
                         brush = Brush.radialGradient(
                             colors = listOf(
-                                SuzieeAccentPrimary.copy(alpha = 0.30f * glowPhase),
+                                SuzieeTheme.colors.accentPrimary.copy(alpha = 0.30f * glowPhase),
                                 Color.Transparent
                             )
                         ),
@@ -184,7 +176,7 @@ fun LandingScreen(
                     .background(
                         brush = Brush.radialGradient(
                             colors = listOf(
-                                SuzieeAccentSecondary.copy(alpha = 0.22f * glowPhase),
+                                SuzieeTheme.colors.accentSecondary.copy(alpha = 0.22f * glowPhase),
                                 Color.Transparent
                             )
                         ),
@@ -204,7 +196,7 @@ fun LandingScreen(
             ) {
                 Text(
                     text = "SKIP",
-                    color = SuzieeTextSecondary,
+                    color = SuzieeTheme.colors.textSecondary,
                     style = MaterialTheme.typography.labelLarge.copy(letterSpacing = 1.5.sp)
                 )
             }
@@ -228,7 +220,7 @@ fun LandingScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "SUZIEE",
-                        color = SuzieeHighlight,
+                        color = SuzieeTheme.colors.highlight,
                         fontSize = 44.sp,
                         fontWeight = FontWeight.ExtraBold,
                         letterSpacing = 8.sp,
@@ -236,7 +228,7 @@ fun LandingScreen(
                     )
                     Text(
                         text = "ANIME MUSIC PLAYER",
-                        color = SuzieeAccentSecondary.copy(alpha = glowPhase),
+                        color = SuzieeTheme.colors.accentSecondary.copy(alpha = glowPhase),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
                         letterSpacing = 4.sp,
@@ -270,7 +262,7 @@ fun LandingScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "YOUR WORLD. YOUR MUSIC.",
-                        color = SuzieeTextSecondary,
+                        color = SuzieeTheme.colors.textSecondary,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         letterSpacing = 2.5.sp,
@@ -287,18 +279,18 @@ fun LandingScreen(
                             .testTag("enter_suziee_button"),
                         shape = RoundedCornerShape(28.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = SuzieeAccentPrimary
+                            containerColor = SuzieeTheme.colors.accentPrimary
                         )
                     ) {
                         Icon(
                             imageVector = Icons.Default.PlayArrow,
                             contentDescription = null,
-                            tint = SuzieeBgPrimary,
+                            tint = SuzieeTheme.colors.bgPrimary,
                             modifier = Modifier.size(22.dp)
                         )
                         Text(
                             text = "ENTER SUZIEE",
-                            color = SuzieeBgPrimary,
+                            color = SuzieeTheme.colors.bgPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 2.sp,
