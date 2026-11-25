@@ -84,7 +84,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -128,6 +130,7 @@ fun PlayerScreen(
     val isFavorite by playerManager.repository.isFavorite(track.id).collectAsState(initial = false)
     val downloadStatus = rememberDownloadUiStatus(track.id)
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
     val dominantColor = rememberDominantColor(track.artworkUrl)
 
     // The player owns the whole window; hide the bars until the user swipes them back.
@@ -465,6 +468,7 @@ fun PlayerScreen(
                         seekPosition = it
                     },
                     onValueChangeFinished = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         playerManager.seekTo(seekPosition.toLong())
                         isUserSeeking = false
                     },
@@ -504,7 +508,10 @@ fun PlayerScreen(
             ) {
                 // Shuffle
                 IconButton(
-                    onClick = { playerManager.toggleShuffle() },
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        playerManager.toggleShuffle()
+                    },
                     modifier = Modifier.testTag("player_shuffle_button")
                 ) {
                     Icon(
@@ -516,7 +523,10 @@ fun PlayerScreen(
 
                 // Previous
                 IconButton(
-                    onClick = { playerManager.playPrevious() },
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        playerManager.playPrevious()
+                    },
                     modifier = Modifier.testTag("player_prev_button")
                 ) {
                     Icon(
@@ -536,6 +546,7 @@ fun PlayerScreen(
                             Brush.linearGradient(listOf(SuzieeTheme.colors.accentPrimary, SuzieeTheme.colors.accentSecondary))
                         )
                         .clickable {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             if (playbackState.errorMessage != null) {
                                 playerManager.retryCurrent()
                             } else {
@@ -570,7 +581,10 @@ fun PlayerScreen(
 
                 // Next
                 IconButton(
-                    onClick = { playerManager.playNext() },
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        playerManager.playNext()
+                    },
                     modifier = Modifier.testTag("player_next_button")
                 ) {
                     Icon(
@@ -583,7 +597,10 @@ fun PlayerScreen(
 
                 // Repeat
                 IconButton(
-                    onClick = { playerManager.toggleRepeat() },
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        playerManager.toggleRepeat()
+                    },
                     modifier = Modifier.testTag("player_repeat_button")
                 ) {
                     Icon(

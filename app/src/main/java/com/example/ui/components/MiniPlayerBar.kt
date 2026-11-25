@@ -37,7 +37,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,6 +63,7 @@ fun MiniPlayerBar(
     // Subtle breathing artwork while audio is playing. Honours the app-wide reduced-motion
     // setting: when motion is reduced the artwork simply sits still.
     val reducedMotion = LocalReducedMotion.current
+    val haptics = LocalHapticFeedback.current
     val artworkScale by animateFloatAsState(
         targetValue = if (state.isPlaying && !reducedMotion) 1.04f else 1f,
         animationSpec = spring(
@@ -152,7 +155,10 @@ fun MiniPlayerBar(
 
                 // Previous track
                 IconButton(
-                    onClick = onSkipPrevious,
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onSkipPrevious()
+                    },
                     modifier = Modifier.testTag("mini_prev_button")
                 ) {
                     Icon(
@@ -174,7 +180,10 @@ fun MiniPlayerBar(
                     )
                 } else {
                     IconButton(
-                        onClick = { if (state.errorMessage != null) onRetry() else onTogglePlayPause() },
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (state.errorMessage != null) onRetry() else onTogglePlayPause()
+                        },
                         modifier = Modifier.testTag("mini_play_pause_button")
                     ) {
                         Icon(
@@ -196,7 +205,10 @@ fun MiniPlayerBar(
 
                 // Next track
                 IconButton(
-                    onClick = onSkipNext,
+                    onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onSkipNext()
+                    },
                     modifier = Modifier.testTag("mini_next_button")
                 ) {
                     Icon(

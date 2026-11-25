@@ -39,24 +39,34 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.imageLoader
 import com.example.data.preferences.SuzieePreferences
 import com.example.data.repository.MusicRepository
 import com.example.ui.theme.SuzieeThemeId
 import com.example.ui.theme.ThemedCard
 import com.example.ui.theme.suzieeColorsFor
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,6 +83,19 @@ fun SettingsScreen(
     val themeKey by preferences.themeId.collectAsState(initial = "aurora_glass")
     val activeTheme = SuzieeThemeId.fromKey(themeKey)
     val scope = rememberCoroutineScope()
+
+    val context = LocalContext.current
+    var cacheSummary by remember { mutableStateOf("Calculating…") }
+    var cacheRefresh by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(cacheRefresh) {
+        cacheSummary = withContext(Dispatchers.IO) {
+            val loader = context.imageLoader
+            val diskBytes = loader.diskCache?.size ?: 0L
+            val memoryBytes = (loader.memoryCache?.size ?: 0).toLong()
+            "Disk ${formatBytes(diskBytes)} · Memory ${formatBytes(memoryBytes)}"
+        }
+    }
 
     Column(
         modifier = modifier
@@ -307,6 +330,41 @@ fun SettingsScreen(
                                 Text("Delete recent playback logs from local device", color = SuzieeTheme.colors.textSecondary, fontSize = 12.sp)
                             }
                         }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            context.imageLoader.diskCache?.clear()
+                                            context.imageLoader.memoryCache?.clear()
+                                        }
+                                        cacheRefresh++
+                                    }
+                                }
+                                .padding(16.dp)
+                                .testTag("clear_image_cache_row"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.CleaningServices,
+                                contentDescription = null,
+                                tint = SuzieeTheme.colors.accentSecondary
+                            )
+                            Column(modifier = Modifier.padding(start = 12.dp)) {
+                                Text(
+                                    "Clear Image Cache",
+                                    color = SuzieeTheme.colors.textPrimary,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    cacheSummary,
+                                    color = SuzieeTheme.colors.textSecondary,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -367,4 +425,10 @@ fun SettingsCard(content: @Composable () -> Unit) {
     ) {
         content()
     }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+    else -> "$bytes B"
 }

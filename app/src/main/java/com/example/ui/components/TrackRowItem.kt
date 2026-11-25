@@ -42,6 +42,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -67,13 +69,17 @@ fun TrackRowItem(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val downloadStatus = rememberDownloadUiStatus(track.id)
+    val haptics = LocalHapticFeedback.current
 
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(if (isCurrentTrack) SuzieeTheme.colors.surfaceElevated else androidx.compose.ui.graphics.Color.Transparent)
-            .clickable(onClick = onClick)
+            .clickable {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            }
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("track_row_${track.id}"),
         verticalAlignment = Alignment.CenterVertically
