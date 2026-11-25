@@ -2,6 +2,9 @@ package com.example.ui.components
 
 import com.example.ui.theme.SuzieeTheme
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -29,9 +32,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.playback.PlaybackState
+import com.example.ui.theme.LocalReducedMotion
 @Composable
 fun MiniPlayerBar(
     state: PlaybackState,
@@ -51,6 +57,18 @@ fun MiniPlayerBar(
     modifier: Modifier = Modifier
 ) {
     val track = state.currentTrack ?: return
+
+    // Subtle breathing artwork while audio is playing. Honours the app-wide reduced-motion
+    // setting: when motion is reduced the artwork simply sits still.
+    val reducedMotion = LocalReducedMotion.current
+    val artworkScale by animateFloatAsState(
+        targetValue = if (state.isPlaying && !reducedMotion) 1.04f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "mini_player_art_pulse"
+    )
 
     val progress = if (state.durationMs > 0) {
         (state.currentPositionMs.toFloat() / state.durationMs.toFloat()).coerceIn(0f, 1f)
@@ -88,6 +106,7 @@ fun MiniPlayerBar(
                 Box(
                     modifier = Modifier
                         .size(46.dp)
+                        .scale(artworkScale)
                         .clip(RoundedCornerShape(10.dp))
                         .background(SuzieeTheme.colors.border),
                     contentAlignment = Alignment.Center

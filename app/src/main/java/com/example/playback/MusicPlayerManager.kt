@@ -41,7 +41,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
-import kotlin.random.Random
 
 data class PlaybackState(
     val isPlaying: Boolean = false,
@@ -163,6 +162,9 @@ class MusicPlayerManager(
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
+    /** Real FFT capture from the active audio session, with a deterministic fallback. */
+    private val visualizerManager = VisualizerManager()
+
     private var progressTrackerJob: Job? = null
     private var originalQueue: List<Track> = emptyList()
 
@@ -199,6 +201,7 @@ class MusicPlayerManager(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _playbackState.update { it.copy(isPlaying = isPlaying) }
                 if (isPlaying) {
+                    visualizerManager.attach(exoPlayer.audioSessionId)
                     startProgressTracker()
                 } else {
                     stopProgressTracker()
@@ -829,10 +832,13 @@ class MusicPlayerManager(
                 if (exoPlayer.isPlaying) {
                     val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
                     val dur = exoPlayer.duration.coerceAtLeast(0L)
-                    // Generate realistic smooth audio visualizer amplitudes
-                    val amps = List(16) {
-                        val base = 0.2f + 0.75f * Random.nextFloat()
-                        base.coerceIn(0.1f, 1.0f)
+                    // Prefer real FFT data; fall back to a deterministic position-driven
+                    // waveform when the platform denies capture (e.g. RECORD_AUDIO not granted).
+                    val captured = visualizerManager.latestAmplitudes()
+                    val amps = if (captured.any { it > 0.12f }) {
+                        captured
+                    } else {
+                        visualizerManager.synthetic(pos, playing = true)
                     }
                     _playbackState.update {
                         it.copy(
@@ -849,14 +855,16 @@ class MusicPlayerManager(
 
     private fun stopProgressTracker() {
         progressTrackerJob?.cancel()
-        // Reset visualizer to quiet gentle state
+        // Zero the bars while paused so the visualizer looks quiet, not random.
+        visualizerManager.pause()
         _playbackState.update {
-            it.copy(visualizerAmplitudes = List(16) { 0.12f })
+            it.copy(visualizerAmplitudes = List(16) { 0.08f })
         }
     }
 
     fun release() {
         stopProgressTracker()
+        visualizerManager.detach()
         resolveJob?.cancel()
         try {
             exoPlayer.release()

@@ -1,12 +1,15 @@
 package com.example
 
 import android.app.Application
+import coil.ImageLoader
+import coil.ImageLoaderFactory
 import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
 import com.example.downloads.DownloadManager
 import com.example.playback.MusicPlayerManager
+import com.example.ui.ImageLoaderConfig
 
-class SuzieeApplication : Application() {
+class SuzieeApplication : Application(), ImageLoaderFactory {
 
     lateinit var database: SuzieeDatabase
         private set
@@ -37,6 +40,9 @@ class SuzieeApplication : Application() {
         // the resolver fetches a session lazily on the first play.
         playerManager.streamResolver.warmUp()
     }
+
+    /** Coil uses this loader for every AsyncImage in the app. */
+    override fun newImageLoader(): ImageLoader = ImageLoaderConfig.create(this)
 
     companion object {
         lateinit var instance: SuzieeApplication

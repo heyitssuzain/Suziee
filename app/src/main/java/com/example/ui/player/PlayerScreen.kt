@@ -103,6 +103,7 @@ import com.example.playback.RepeatMode as PlaybackRepeatMode
 import com.example.ui.components.WaveformVisualizer
 import com.example.ui.components.rememberDownloadUiStatus
 import com.example.ui.theme.AuroraBackground
+import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.SystemBarsVisibility
 import com.example.ui.theme.rememberDominantColor
 import kotlinx.coroutines.launch
@@ -623,7 +624,7 @@ fun LyricsView(
 ) {
     // One infinite transition drives every ambient element, so they stay in sync.
     val ambient = rememberInfiniteTransition(label = "lyrics_ambient")
-    val drift by ambient.animateFloat(
+    val driftAnim by ambient.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -632,7 +633,7 @@ fun LyricsView(
         ),
         label = "drift"
     )
-    val breathe by ambient.animateFloat(
+    val breatheAnim by ambient.animateFloat(
         initialValue = 0.4f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -641,7 +642,7 @@ fun LyricsView(
         ),
         label = "breathe"
     )
-    val sheen by ambient.animateFloat(
+    val sheenAnim by ambient.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -651,12 +652,31 @@ fun LyricsView(
         label = "sheen"
     )
 
+    // Freeze ambient motion when the user has asked for reduced motion.
+    val reducedMotion = LocalReducedMotion.current
+    val drift = if (reducedMotion) 0.5f else driftAnim
+    val breathe = if (reducedMotion) 0.7f else breatheAnim
+    val sheen = if (reducedMotion) 0f else sheenAnim
+
+    // The panel follows the active theme instead of forcing the glass language on Clay/Minimal.
+    val colors = SuzieeTheme.colors
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(28.dp))
+            .clip(
+                when {
+                    colors.isClay -> RoundedCornerShape(32.dp)
+                    colors.isGlass -> RoundedCornerShape(28.dp)
+                    else -> RoundedCornerShape(0.dp)
+                }
+            )
+            .background(colors.bgPrimary)
     ) {
-        GlassBackdrop(drift = drift, breathe = breathe, sheen = sheen)
+        when {
+            colors.isGlass -> GlassBackdrop(drift = drift, breathe = breathe, sheen = sheen)
+            colors.isClay -> ClayLyricsBackdrop(breathe = breathe)
+            else -> MinimalLyricsBackdrop()
+        }
 
         when {
             isLoading -> LyricSkeleton(
@@ -701,6 +721,52 @@ fun LyricsView(
             else -> PlainLyrics(plainLyrics = lyricsResult?.plainLyrics)
         }
     }
+}
+
+/**
+ * Pink Clay lyrics backdrop: an opaque, warm wash with a soft radial glow.
+ * No glass orbs or sweeping sheen - clay is matte by design.
+ */
+@Composable
+private fun BoxScope.ClayLyricsBackdrop(breathe: Float) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        SuzieeTheme.colors.accentPrimary.copy(alpha = 0.16f),
+                        SuzieeTheme.colors.surfaceCard,
+                        SuzieeTheme.colors.bgPrimary
+                    )
+                )
+            )
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.radialGradient(
+                    colors = listOf(
+                        SuzieeTheme.colors.accentSecondary.copy(alpha = 0.10f + 0.05f * breathe),
+                        Color.Transparent
+                    )
+                )
+            )
+    )
+}
+
+/**
+ * Minimal Slate lyrics backdrop: flat paper, no gradient, a single hairline frame.
+ */
+@Composable
+private fun BoxScope.MinimalLyricsBackdrop() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(SuzieeTheme.colors.bgPrimary)
+            .border(1.dp, SuzieeTheme.colors.border)
+    )
 }
 
 /**

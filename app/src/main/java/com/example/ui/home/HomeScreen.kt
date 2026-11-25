@@ -473,7 +473,7 @@ private sealed interface DiscoveryState {
  * Process-lifetime cache of rail results. Home is recomposed every time the user returns to
  * it; without this each visit would re-run two network searches. "Retry" bypasses it.
  */
-private val discoveryRailCache = mutableMapOf<String, List<Track>>()
+private val discoveryRailCache = object : android.util.LruCache<String, List<Track>>(20) {}
 
 /**
  * A horizontally scrolling shelf of real, playable songs.
@@ -519,7 +519,7 @@ private fun DiscoveryRail(
                 if (tracks.isEmpty()) {
                     DiscoveryState.Failure("No songs available right now.")
                 } else {
-                    discoveryRailCache[query] = tracks
+                    discoveryRailCache.put(query, tracks)
                     DiscoveryState.Ready(tracks)
                 }
             }
