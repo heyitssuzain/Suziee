@@ -165,6 +165,13 @@ class MusicPlayerManager(
     /** Real FFT capture from the active audio session, with a deterministic fallback. */
     private val visualizerManager = VisualizerManager()
 
+    /** Sleep timer: 0 means off. */
+    private var sleepTimerJob: Job? = null
+    private val _sleepTimerMinutes = MutableStateFlow(0)
+    val sleepTimerMinutes: StateFlow<Int> = _sleepTimerMinutes.asStateFlow()
+    private val _sleepTimerRemainingMs = MutableStateFlow(0L)
+    val sleepTimerRemainingMs: StateFlow<Long> = _sleepTimerRemainingMs.asStateFlow()
+
     private var progressTrackerJob: Job? = null
     private var originalQueue: List<Track> = emptyList()
 
@@ -862,9 +869,45 @@ class MusicPlayerManager(
         }
     }
 
+    /**
+     * Stops playback after [minutes] minutes. Passing 0 or a negative value cancels it.
+     * The remaining time is exposed so a dialog/notification can show a countdown.
+     */
+    fun setSleepTimer(minutes: Int) {
+        sleepTimerJob?.cancel()
+        if (minutes <= 0) {
+            _sleepTimerMinutes.value = 0
+            _sleepTimerRemainingMs.value = 0L
+            return
+        }
+        _sleepTimerMinutes.value = minutes
+        _sleepTimerRemainingMs.value = minutes * 60_000L
+        sleepTimerJob = scope.launch {
+            var remaining = minutes * 60_000L
+            while (remaining > 0 && isActive) {
+                delay(1_000L)
+                remaining -= 1_000L
+                _sleepTimerRemainingMs.value = remaining.coerceAtLeast(0L)
+            }
+            if (remaining <= 0) {
+                _sleepTimerMinutes.value = 0
+                _sleepTimerRemainingMs.value = 0L
+                exoPlayer.pause()
+            }
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _sleepTimerMinutes.value = 0
+        _sleepTimerRemainingMs.value = 0L
+    }
+
     fun release() {
         stopProgressTracker()
         visualizerManager.detach()
+        sleepTimerJob?.cancel()
         resolveJob?.cancel()
         try {
             exoPlayer.release()

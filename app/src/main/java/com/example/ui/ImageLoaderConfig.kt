@@ -18,7 +18,7 @@ object ImageLoaderConfig {
     private const val DISK_CACHE_BYTES = 150L * 1024 * 1024
 
     fun create(context: Context): ImageLoader {
-        val memoryBytes = (Runtime.getRuntime().maxMemory() * 0.15).toLong()
+        val memoryBytes = (Runtime.getRuntime().maxMemory() * 0.15).toInt()
         return ImageLoader.Builder(context)
             .memoryCache {
                 MemoryCache.Builder(context)

@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -134,6 +135,8 @@ fun PlayerScreen(
 
     var showLyrics by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
+    var showSleepTimerDialog by remember { mutableStateOf(false) }
+    val sleepTimerMinutes by playerManager.sleepTimerMinutes.collectAsState()
     var lyricsResult by remember { mutableStateOf<LyricsResult?>(null) }
     var isLoadingLyrics by remember { mutableStateOf(false) }
 
@@ -426,6 +429,22 @@ fun PlayerScreen(
                             )
                         }
                     }
+
+                    IconButton(
+                        onClick = { showSleepTimerDialog = true },
+                        modifier = Modifier.testTag("player_sleep_timer_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Timer,
+                            contentDescription = "Sleep timer",
+                            tint = if (sleepTimerMinutes > 0) {
+                                SuzieeTheme.colors.accentPrimary
+                            } else {
+                                SuzieeTheme.colors.textMuted
+                            },
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
             }
 
@@ -603,6 +622,13 @@ fun PlayerScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+
+    if (showSleepTimerDialog) {
+        SleepTimerDialog(
+            playerManager = playerManager,
+            onDismiss = { showSleepTimerDialog = false }
+        )
     }
 }
 
