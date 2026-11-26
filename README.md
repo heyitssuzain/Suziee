@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="hero.png" alt="Suziee — in-app home screen hero artwork" width="420" />
+  <img src="icon.png" alt="Suziee app icon" width="104" />
 </p>
 
 <h1 align="center">Suziee — Premium Anime Music Player</h1>
@@ -7,6 +7,10 @@
 <p align="center">
   <a href="https://github.com/heyitssuzain/Suziee/releases/latest"><img alt="Download latest APK" src="https://img.shields.io/badge/Download-Suziee.apk-00E5CC?style=for-the-badge&logo=android&logoColor=white" /></a>
   <a href="https://github.com/heyitssuzain/Suziee/releases/latest"><img alt="Version" src="https://img.shields.io/badge/version-1.3-blueviolet?style=for-the-badge" /></a>
+</p>
+
+<p align="center">
+  <img src="hero.png" alt="Suziee hero banner: Aurora Glass, Pink Clay and Minimal Slate" width="880" />
 </p>
 
 Suziee is a native Android music player crafted with **Kotlin** and **Jetpack Compose**, featuring three distinct visual themes (Aurora Glass, Pink Clay and Minimal Slate), atmospheric per-theme motion, real online music discovery, background playback with **Media3 ExoPlayer**, offline music downloads, persistent **Room** storage, synchronized **LRCLIB** lyrics with translation and offset controls, and on-device voice commands.
@@ -79,13 +83,11 @@ gradle assembleDebug
 
 The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
-## 📚 Documentation
+## 📄 License & Notices
 
-- [`PRD.md`](PRD.md) — product requirements
-- [`TRD.md`](TRD.md) — technical design
-- [`docs/BUILD.md`](docs/BUILD.md) — build details
-- [`docs/TESTING.md`](docs/TESTING.md) — testing
-- [`NOTICE.md`](NOTICE.md) and [`docs/THIRD_PARTY_LICENSES.md`](docs/THIRD_PARTY_LICENSES.md) — notices and third-party licenses
+Suziee is released under the [MIT License](LICENSE).
+
+Bundled font and artwork attributions plus third-party library licenses are listed in [`NOTICE`](NOTICE).
 
 ## 🔒 Privacy-First
 
