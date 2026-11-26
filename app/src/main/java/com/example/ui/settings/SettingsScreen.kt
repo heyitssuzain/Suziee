@@ -734,15 +734,14 @@ fun SettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(32.dp))
 
-                // PR-1: the hidden entry. Only rendered once the gesture has unlocked it,
-                // and only while this Settings screen is open.
-                item {
-                    SecretEntryCard(
-                        visible = isSecretRevealed,
-                        onClick = { showSecretPassword = true }
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
+                // PR-1: the hidden entry. Only rendered once the gesture has unlocked it, and
+                // only while this Settings screen is open. It shares the About item so it
+                // stays at the very bottom of the list, right after "About Suziee".
+                SecretEntryCard(
+                    visible = isSecretRevealed,
+                    onClick = { showSecretPassword = true }
+                )
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
 
@@ -852,9 +851,12 @@ fun SettingsSectionHeader(title: String) {
 }
 
 @Composable
-fun SettingsCard(content: @Composable () -> Unit) {
+fun SettingsCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
     ThemedCard(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp)
     ) {
         content()
