@@ -155,4 +155,69 @@ class YouTubeAudioPolicyTest {
 
         assertEquals("audio/mp4", picked?.mimeType)
     }
+
+    @Test
+    fun `medium tier prefers aac 140 over opus 251`() {
+        val picked = YouTubeAudioPolicy.pickAudioFormat(
+            listOf(
+                format(251, mime = "audio/webm; codecs=\"opus\""),
+                format(140, mime = "audio/mp4; codecs=\"mp4a.40.2\"")
+            ),
+            YouTubeAudioPolicy.AudioQuality.MEDIUM
+        )
+
+        assertEquals(140, picked?.itag)
+    }
+
+    @Test
+    fun `low tier prefers the smallest opus and still falls back`() {
+        val picked = YouTubeAudioPolicy.pickAudioFormat(
+            listOf(
+                format(251, mime = "audio/webm; codecs=\"opus\""),
+                format(250, mime = "audio/webm; codecs=\"opus\""),
+                format(140, mime = "audio/mp4; codecs=\"mp4a.40.2\"")
+            ),
+            YouTubeAudioPolicy.AudioQuality.LOW
+        )
+
+        assertEquals(250, picked?.itag)
+    }
+
+    @Test
+    fun `a tier with none of its itags available falls back to bitrate`() {
+        val picked = YouTubeAudioPolicy.pickAudioFormat(
+            listOf(
+                format(249, mime = "audio/webm", bitrate = 50_000),
+                format(251, mime = "audio/webm", bitrate = 160_000)
+            ),
+            YouTubeAudioPolicy.AudioQuality.MEDIUM
+        )
+
+        assertEquals(251, picked?.itag)
+    }
+
+    @Test
+    fun `quality names map to the expected tiers`() {
+        assertEquals(
+            YouTubeAudioPolicy.AudioQuality.HIGH,
+            YouTubeAudioPolicy.qualityFromPreference("high")
+        )
+        assertEquals(
+            YouTubeAudioPolicy.AudioQuality.MEDIUM,
+            YouTubeAudioPolicy.qualityFromPreference("medium")
+        )
+        assertEquals(
+            YouTubeAudioPolicy.AudioQuality.LOW,
+            YouTubeAudioPolicy.qualityFromPreference("data_saver")
+        )
+        // Anything unrecognised (including null) degrades to the default, never to low.
+        assertEquals(
+            YouTubeAudioPolicy.AudioQuality.HIGH,
+            YouTubeAudioPolicy.qualityFromPreference(null)
+        )
+        assertEquals(
+            YouTubeAudioPolicy.AudioQuality.HIGH,
+            YouTubeAudioPolicy.qualityFromPreference("nonsense")
+        )
+    }
 }

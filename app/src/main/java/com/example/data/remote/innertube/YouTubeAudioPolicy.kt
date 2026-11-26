@@ -80,11 +80,12 @@ object YouTubeAudioPolicy {
     /**
      * Picks the best audio-only format for [quality].
      *
-     * Preference: the tier's itag list in order (default: Opus 251 160 kbps → AAC 140
-     * 128 kbps) → the highest-bitrate remaining audio entry. Formats without a direct
-     * `url` are skipped: YouTube's web clients now report SABR-only entries
-     * (`serverAbrStreamingUrl`) that ExoPlayer cannot play, which is exactly why the old
-     * WebView capture stopped working.
+     * Preference: the tier's itag list **in priority order** (default: Opus 251 160 kbps →
+     * AAC 140 128 kbps) → the highest-bitrate remaining audio entry. The tier is walked in
+     * order rather than scanning `formats` for a match, so a caller listing AAC before Opus
+     * still gets the Opus stream. Formats without a direct `url` are skipped: YouTube's web
+     * clients now report SABR-only entries (`serverAbrStreamingUrl`) that ExoPlayer cannot
+     * play, which is exactly why the old WebView capture stopped working.
      */
     fun pickAudioFormat(
         formats: List<RawAudioFormat>,
@@ -98,8 +99,9 @@ object YouTubeAudioPolicy {
         }
         if (playable.isEmpty()) return null
 
-        val preferred = playable.firstOrNull { (format, _) ->
-            quality.preferredItags.contains(format.itag)
+        // Walk the tier in priority order so an API listing 140 before 251 still yields 251.
+        val preferred = quality.preferredItags.firstNotNullOfOrNull { itag ->
+            playable.firstOrNull { (format, _) -> format.itag == itag }
         }
         val (chosen, mime) = preferred ?: playable.maxByOrNull { it.first.bitrate } ?: return null
 
