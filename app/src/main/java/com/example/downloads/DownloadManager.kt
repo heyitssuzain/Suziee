@@ -4,7 +4,9 @@ import android.content.Context
 import android.util.Log
 import com.example.data.local.SuzieeDatabase
 import com.example.data.local.entities.DownloadEntity
+import com.example.data.preferences.SuzieePreferences
 import com.example.data.remote.innertube.InnerTubeApiClient
+import com.example.data.remote.innertube.YouTubeAudioPolicy
 import com.example.data.remote.streaming.OnlineStreamResolver
 import com.example.data.repository.MusicRepository
 import com.example.domain.model.StreamInfo
@@ -13,6 +15,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -45,7 +48,8 @@ class DownloadManager(
     private val context: Context,
     private val database: SuzieeDatabase,
     private val repository: MusicRepository,
-    private val streamResolver: OnlineStreamResolver
+    private val streamResolver: OnlineStreamResolver,
+    private val preferences: SuzieePreferences
 ) {
     private val downloadDao = database.downloadDao()
     private val activeJobs = ConcurrentHashMap<String, Job>()
@@ -189,7 +193,12 @@ class DownloadManager(
      * video's audio-only stream; playback and downloads use the same provider.
      */
     private suspend fun resolveForDownload(track: Track): StreamInfo? {
-        val resolved = streamResolver.resolve(track.id)
+        // P2-10: the user's download-quality tier decides which audio format is saved.
+        val quality = YouTubeAudioPolicy.qualityFromPreference(
+            runCatching { preferences.downloadQuality.first() }.getOrDefault("high")
+        )
+        Log.i(TAG, "Download quality tier for ${track.id}: ${quality.name}")
+        val resolved = streamResolver.resolve(track.id, quality)
         if (resolved != null) {
             Log.i(TAG, "Download source for ${track.id}: ${resolved.source}")
         }

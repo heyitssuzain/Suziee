@@ -3,6 +3,7 @@ package com.example.ui.components
 import com.example.ui.theme.SuzieeTheme
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,15 +39,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.SuzieeApplication
 import com.example.domain.model.Track
 @Composable
@@ -65,11 +69,20 @@ fun TrackRowItem(
      * detail views, so removing a song here never touches the shared library entry.
      */
     onRemoveFromPlaylist: (() -> Unit)? = null,
+    /** 0f..1f renders a progress ring around the artwork (used by Continue Listening). */
+    progress: Float? = null,
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val downloadStatus = rememberDownloadUiStatus(track.id)
     val haptics = LocalHapticFeedback.current
+    val context = LocalContext.current
+    val artworkRequest = remember(track.artworkUrl, context) {
+        ImageRequest.Builder(context)
+            .data(track.artworkUrl)
+            .crossfade(220)
+            .build()
+    }
 
     Row(
         modifier = modifier
@@ -94,7 +107,7 @@ fun TrackRowItem(
         ) {
             if (track.artworkUrl.isNotBlank()) {
                 AsyncImage(
-                    model = track.artworkUrl,
+                    model = artworkRequest,
                     contentDescription = "Artwork for ${track.title}",
                     modifier = Modifier.size(52.dp),
                     contentScale = ContentScale.Crop
@@ -120,6 +133,18 @@ fun TrackRowItem(
                         contentDescription = "Playing",
                         tint = SuzieeTheme.colors.accentSecondary,
                         modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
+            if (progress != null) {
+                Canvas(modifier = Modifier.matchParentSize().padding(2.dp)) {
+                    drawArc(
+                        color = SuzieeTheme.colors.accentPrimary,
+                        startAngle = -90f,
+                        sweepAngle = 360f * progress.coerceIn(0f, 1f),
+                        useCenter = false,
+                        style = Stroke(width = 3.dp.toPx())
                     )
                 }
             }

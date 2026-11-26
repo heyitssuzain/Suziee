@@ -40,12 +40,15 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.remember
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.playback.PlaybackState
 import com.example.ui.theme.LocalReducedMotion
 @Composable
@@ -64,6 +67,13 @@ fun MiniPlayerBar(
     // setting: when motion is reduced the artwork simply sits still.
     val reducedMotion = LocalReducedMotion.current
     val haptics = LocalHapticFeedback.current
+    val context = LocalContext.current
+    val artworkRequest = remember(track.artworkUrl, context) {
+        ImageRequest.Builder(context)
+            .data(track.artworkUrl)
+            .crossfade(220)
+            .build()
+    }
     val artworkScale by animateFloatAsState(
         targetValue = if (state.isPlaying && !reducedMotion) 1.04f else 1f,
         animationSpec = spring(
@@ -116,7 +126,7 @@ fun MiniPlayerBar(
                 ) {
                     if (track.artworkUrl.isNotBlank()) {
                         AsyncImage(
-                            model = track.artworkUrl,
+                            model = artworkRequest,
                             contentDescription = null,
                             modifier = Modifier.size(46.dp),
                             contentScale = ContentScale.Crop

@@ -338,7 +338,8 @@ fun SuzieeApp(
                             onTrackOptions = { trackForPlaylistDialog = it },
                             onOpenImportPlaylist = { showImportDialog = true },
                             onOpenLibrary = { currentDestination = MainDestination.LIBRARY },
-                            onOpenDownloads = { currentDestination = MainDestination.DOWNLOADS }
+                            onOpenDownloads = { currentDestination = MainDestination.DOWNLOADS },
+                            onSmartDownloadTrack = { track -> downloadManager.downloadTrack(track) }
                         )
                     }
                     MainDestination.SEARCH -> {

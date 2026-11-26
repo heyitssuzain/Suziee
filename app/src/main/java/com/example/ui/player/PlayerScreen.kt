@@ -87,6 +87,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -98,6 +99,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.remote.lyrics.LyricsResult
 import com.example.domain.model.LyricsLine
 import com.example.domain.model.Track
@@ -132,6 +134,14 @@ fun PlayerScreen(
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val dominantColor = rememberDominantColor(track.artworkUrl)
+    val context = LocalContext.current
+    // Crossfade the cover instead of hard-cutting when the queue advances.
+    val artworkRequest = remember(track.artworkUrl, context) {
+        ImageRequest.Builder(context)
+            .data(track.artworkUrl)
+            .crossfade(300)
+            .build()
+    }
 
     // The player owns the whole window; hide the bars until the user swipes them back.
     SystemBarsVisibility(hideBars = true, useDarkIcons = !SuzieeTheme.colors.isDark)
@@ -140,6 +150,7 @@ fun PlayerScreen(
     var showQueue by remember { mutableStateOf(false) }
     var showSleepTimerDialog by remember { mutableStateOf(false) }
     val sleepTimerMinutes by playerManager.sleepTimerMinutes.collectAsState()
+    val lyricsOffsetMs by playerManager.preferences.lyricsOffsetMs.collectAsState(initial = 0)
     var lyricsResult by remember { mutableStateOf<LyricsResult?>(null) }
     var isLoadingLyrics by remember { mutableStateOf(false) }
 
@@ -180,8 +191,7 @@ fun PlayerScreen(
         )
         if (track.artworkUrl.isNotBlank()) {
             AsyncImage(
-                model = track.artworkUrl,
-                contentDescription = null,
+                model = artworkRequest,
                 modifier = Modifier
                     .fillMaxSize()
                     .blur(64.dp)
@@ -297,7 +307,7 @@ fun PlayerScreen(
                         LyricsView(
                             lyricsResult = lyricsResult,
                             isLoading = isLoadingLyrics,
-                            currentPositionMs = playbackState.currentPositionMs,
+                            currentPositionMs = playbackState.currentPositionMs + lyricsOffsetMs,
                             onSeek = { positionMs -> playerManager.seekTo(positionMs) }
                         )
                     }
@@ -345,7 +355,7 @@ fun PlayerScreen(
                             ) {
                                 if (track.artworkUrl.isNotBlank()) {
                                     AsyncImage(
-                                        model = track.artworkUrl,
+                                        model = artworkRequest,
                                         contentDescription = "Album Artwork",
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Crop
@@ -703,6 +713,7 @@ fun LyricsView(
 
     // The panel follows the active theme instead of forcing the glass language on Clay/Minimal.
     val colors = SuzieeTheme.colors
+    var showTranslations by remember { mutableStateOf(true) }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -736,6 +747,7 @@ fun LyricsView(
                     SyncedLyrics(
                         lines = lyricsResult.parsedLines,
                         currentPositionMs = currentPositionMs,
+                        showTranslations = showTranslations,
                         onSeek = onSeek
                     )
 
@@ -758,6 +770,24 @@ fun LyricsView(
                         breathe = breathe,
                         modifier = Modifier.align(Alignment.TopCenter)
                     )
+                    // P1-6: translation toggle. Only meaningful for bilingual lyrics, but
+                    // harmless (and compact) for every track.
+                    TextButton(
+                        onClick = { showTranslations = !showTranslations },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 10.dp, end = 12.dp)
+                            .testTag("lyrics_translation_toggle")
+                    ) {
+                        Text(
+                            text = if (showTranslations) "A文 ON" else "A文 OFF",
+                            color = if (showTranslations) SuzieeTheme.colors.accentPrimary
+                            else SuzieeTheme.colors.textMuted,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                    }
                 }
             }
 
@@ -1054,6 +1084,7 @@ private fun PlainLyrics(plainLyrics: String?) {
 private fun SyncedLyrics(
     lines: List<LyricsLine>,
     currentPositionMs: Long,
+    showTranslations: Boolean,
     onSeek: (Long) -> Unit
 ) {
     val listState = rememberLazyListState()
@@ -1098,6 +1129,8 @@ private fun SyncedLyrics(
             itemsIndexed(lines) { index, line ->
                 LyricLineItem(
                     text = line.text,
+                    translation = line.translation,
+                    showTranslation = showTranslations,
                     isActive = index == activeIndex,
                     progress = if (index == activeIndex) lineProgress else 0f,
                     onClick = { onSeek(line.timeMs) }
@@ -1150,6 +1183,8 @@ private fun InstrumentalPulse() {
 @Composable
 private fun LyricLineItem(
     text: String,
+    translation: String?,
+    showTranslation: Boolean,
     isActive: Boolean,
     progress: Float,
     onClick: () -> Unit
@@ -1160,12 +1195,18 @@ private fun LyricLineItem(
         animationSpec = tween(durationMillis = 520, easing = FastOutSlowInEasing),
         label = "line_activation"
     )
+    // P1-8: an 80ms follower softens the word-to-word colour switch into a short crossfade.
+    val smoothProgress by animateFloatAsState(
+        targetValue = progress,
+        animationSpec = tween(durationMillis = 80),
+        label = "word_color_fade"
+    )
 
     val tokens = remember(text) {
         Regex("""\S+""").findAll(text).map { it.value }.toList()
     }
     val activeWord = if (isActive) {
-        (progress * tokens.size).toInt().coerceIn(0, (tokens.size - 1).coerceAtLeast(0))
+        (smoothProgress * tokens.size).toInt().coerceIn(0, (tokens.size - 1).coerceAtLeast(0))
     } else {
         -1
     }
@@ -1248,6 +1289,16 @@ private fun LyricLineItem(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
             )
+
+            if (showTranslation && !translation.isNullOrBlank()) {
+                Text(
+                    text = translation,
+                    color = SuzieeTheme.colors.textSecondary.copy(alpha = 0.72f),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 14.dp)
+                )
+            }
 
             // Gradient underline that fills with the line's progress.
             Box(

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -59,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.domain.model.Playlist
+import com.example.data.importer.PlaylistExporter
 import com.example.domain.model.Track
 import com.example.playback.MusicPlayerManager
 import com.example.ui.components.TrackRowItem
@@ -84,6 +86,35 @@ fun LibraryScreen(
     val scope = rememberCoroutineScope()
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var selectedPlaylistForDetail by remember { mutableStateOf<Playlist?>(null) }
+
+    // P2-5: hand a copy of the playlist to the system share sheet as JSON. The file is
+    // written to this app's cache directory first, then handed over with a content URI.
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val exportPlaylist: (Playlist, List<Track>) -> Unit = { playlist, tracks ->
+        scope.launch {
+            try {
+                val json = PlaylistExporter.toJson(playlist, tracks)
+                val file = java.io.File(context.cacheDir, PlaylistExporter.fileNameFor(playlist))
+                file.writeText(json)
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file
+                )
+                val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = PlaylistExporter.MIME_TYPE
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    putExtra(android.content.Intent.EXTRA_TITLE, playlist.name)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(
+                    android.content.Intent.createChooser(sendIntent, "Export \"${playlist.name}\"")
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("LibraryScreen", "Playlist export failed: ${e.message}")
+            }
+        }
+    }
 
     Column(
         modifier = modifier
@@ -204,6 +235,7 @@ fun LibraryScreen(
                             selectedPlaylistForDetail = null
                         }
                     },
+                    onExportPlaylist = { exportPlaylist(pl, playlistTracks) },
                     onTrackOptions = onTrackOptions
                 )
             } else {
@@ -428,6 +460,7 @@ fun PlaylistDetailView(
     onAddToQueue: (Track) -> Unit,
     onRemoveTrack: (Track) -> Unit,
     onDeletePlaylist: () -> Unit,
+    onExportPlaylist: () -> Unit = {},
     onTrackOptions: (Track) -> Unit
 ) {
     LazyColumn(
@@ -476,6 +509,14 @@ fun PlaylistDetailView(
                     ) {
                         Icon(Icons.Default.Shuffle, contentDescription = null, tint = SuzieeTheme.colors.textPrimary)
                         Text("Shuffle", color = SuzieeTheme.colors.textPrimary, modifier = Modifier.padding(start = 4.dp))
+                    }
+                    // P2-5: share the playlist as JSON in the format the app's own importer reads.
+                    Button(
+                        onClick = onExportPlaylist,
+                        colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.surfaceElevated)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, tint = SuzieeTheme.colors.accentSecondary)
+                        Text("Export", color = SuzieeTheme.colors.textPrimary, modifier = Modifier.padding(start = 4.dp))
                     }
                 }
             }

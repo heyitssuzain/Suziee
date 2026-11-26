@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -36,6 +37,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -75,6 +77,9 @@ fun SearchScreen(
     var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var selectedTab by remember { mutableStateOf(0) }
+
+    val recentSearches by playerManager.preferences.recentSearches.collectAsState(initial = emptyList())
 
     val playbackState by playerManager.playbackState.collectAsState()
     val scope = rememberCoroutineScope()
@@ -89,6 +94,7 @@ fun SearchScreen(
         isSearching = true
         errorMessage = null
         suggestions = emptyList()
+        selectedTab = 0
 
         searchJob?.cancel()
         searchJob = scope.launch {
@@ -96,6 +102,7 @@ fun SearchScreen(
             isSearching = false
             if (result.isSuccess) {
                 searchResults = result.getOrNull().orEmpty()
+                playerManager.preferences.addRecentSearch(trimmed)
                 if (searchResults.isEmpty()) {
                     errorMessage = "No matching songs found. Try a different title or artist."
                 }
@@ -284,43 +291,109 @@ fun SearchScreen(
                 }
 
                 searchResults.isNotEmpty() -> {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 120.dp, top = 4.dp)
-                    ) {
-                        item {
-                            Text(
-                                text = "Results (${searchResults.size})",
-                                color = SuzieeTheme.colors.textSecondary,
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // P1-12: tabbed results. Only the dimensions we actually have
+                        // (songs + artists) are exposed, so no tab is ever a dead end.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SearchTabChip(
+                                label = "Songs (${searchResults.size})",
+                                selected = selectedTab == 0,
+                                onClick = { selectedTab = 0 },
+                                modifier = Modifier.weight(1f)
+                            )
+                            SearchTabChip(
+                                label = "Artists (${searchResults.map { it.artist }.distinct().size})",
+                                selected = selectedTab == 1,
+                                onClick = { selectedTab = 1 },
+                                modifier = Modifier.weight(1f)
                             )
                         }
 
-                        items(searchResults) { track ->
-                            TrackRowItem(
-                                track = track,
-                                isCurrentTrack = playbackState.currentTrack?.id == track.id,
-                                isPlaying = playbackState.isPlaying,
-                                onClick = {
-                                    playerManager.playTrack(track, searchResults)
-                                },
-                                onFavoriteToggle = {
-                                    scope.launch {
-                                        playerManager.repository.toggleFavorite(track)
+                        if (selectedTab == 1) {
+                            val artistGroups = searchResults.groupBy { it.artist.ifBlank { "Unknown Artist" } }
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 120.dp, top = 8.dp)
+                            ) {
+                                items(artistGroups.entries.toList()) { entry ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable { playerManager.playTrack(entry.value.first(), entry.value) }
+                                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.MusicNote,
+                                            contentDescription = null,
+                                            tint = SuzieeTheme.colors.accentSecondary
+                                        )
+                                        Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
+                                            Text(
+                                                text = entry.key,
+                                                color = SuzieeTheme.colors.textPrimary,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Text(
+                                                text = "${entry.value.size} songs · tap to play all",
+                                                color = SuzieeTheme.colors.textSecondary,
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                        Text(
+                                            text = "Play",
+                                            color = SuzieeTheme.colors.accentPrimary,
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
                                     }
-                                },
-                                onAddToPlaylist = { onTrackOptions(track) },
-                                onPlayNext = { playerManager.playNext(track) },
-                                onAddToQueue = { playerManager.addToQueue(track) },
-                                onDownload = { onDownloadTrack(track) }
-                            )
+                                }
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 120.dp, top = 4.dp)
+                            ) {
+                                item {
+                                    Text(
+                                        text = "Results (${searchResults.size})",
+                                        color = SuzieeTheme.colors.textSecondary,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                    )
+                                }
+
+                                items(searchResults) { track ->
+                                    TrackRowItem(
+                                        track = track,
+                                        isCurrentTrack = playbackState.currentTrack?.id == track.id,
+                                        isPlaying = playbackState.isPlaying,
+                                        onClick = {
+                                            playerManager.playTrack(track, searchResults)
+                                        },
+                                        onFavoriteToggle = {
+                                            scope.launch {
+                                                playerManager.repository.toggleFavorite(track)
+                                            }
+                                        },
+                                        onAddToPlaylist = { onTrackOptions(track) },
+                                        onPlayNext = { playerManager.playNext(track) },
+                                        onAddToQueue = { playerManager.addToQueue(track) },
+                                        onDownload = { onDownloadTrack(track) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
 
                 else -> {
-                    // Initial search empty state with anime ideas
+                    // Initial search empty state with anime ideas + persisted recent searches
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -328,6 +401,54 @@ fun SearchScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
+                        if (recentSearches.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Recent searches",
+                                    color = SuzieeTheme.colors.textPrimary,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    modifier = Modifier.padding(start = 4.dp)
+                                )
+                                TextButton(onClick = {
+                                    scope.launch { playerManager.preferences.clearRecentSearches() }
+                                }) {
+                                    Text("Clear", color = SuzieeTheme.colors.textSecondary, fontSize = 12.sp)
+                                }
+                            }
+                            recentSearches.take(4).forEach { recent ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            searchQuery = recent
+                                            executeSearch(recent)
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.History,
+                                        contentDescription = null,
+                                        tint = SuzieeTheme.colors.textMuted,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                    Text(
+                                        text = recent,
+                                        color = SuzieeTheme.colors.textPrimary,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(start = 10.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(18.dp))
+                        }
+
                         Text(
                             text = "Discover Any Song",
                             color = SuzieeTheme.colors.textPrimary,
@@ -380,5 +501,33 @@ fun SearchScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SearchTabChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) SuzieeTheme.colors.accentPrimary.copy(alpha = 0.18f)
+        else SuzieeTheme.colors.surfaceElevated,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) SuzieeTheme.colors.accentPrimary else SuzieeTheme.colors.border
+        ),
+        modifier = modifier.clickable { onClick() }
+    ) {
+        Text(
+            text = label,
+            color = if (selected) SuzieeTheme.colors.accentPrimary else SuzieeTheme.colors.textSecondary,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+        )
     }
 }

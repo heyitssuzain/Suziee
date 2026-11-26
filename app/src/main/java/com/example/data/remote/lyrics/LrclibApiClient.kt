@@ -97,7 +97,7 @@ class LrclibApiClient {
     }
 
     fun parseSyncedLyrics(syncedLyrics: String): List<LyricsLine> {
-        val lines = mutableListOf<LyricsLine>()
+        val rawParsed = mutableListOf<LyricsLine>()
         val rawLines = syncedLyrics.split("\n")
         for (raw in rawLines) {
             val matcher = timeTagPattern.matcher(raw.trim())
@@ -113,10 +113,24 @@ class LrclibApiClient {
                 }
                 val totalMs = (min * 60 + sec) * 1000 + ms
                 val text = matcher.group(4)?.trim() ?: ""
-                lines.add(LyricsLine(timeMs = totalMs, text = text))
+                rawParsed.add(LyricsLine(timeMs = totalMs, text = text))
             }
         }
-        return lines.sortedBy { it.timeMs }
+
+        // P1-6: bilingual LRC files stack the original and its translation at the same
+        // timestamp. Collapse duplicates into one line instead of showing each twice.
+        val merged = mutableListOf<LyricsLine>()
+        rawParsed.sortedBy { it.timeMs }.forEach { line ->
+            val previous = merged.lastOrNull()
+            if (previous != null && kotlin.math.abs(line.timeMs - previous.timeMs) <= 15L &&
+                previous.translation == null && line.text.isNotBlank()
+            ) {
+                merged[merged.lastIndex] = previous.copy(translation = line.text)
+            } else {
+                merged.add(line)
+            }
+        }
+        return merged
     }
 
     private fun cleanSearchTerm(term: String): String {

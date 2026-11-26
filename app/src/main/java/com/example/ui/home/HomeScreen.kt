@@ -1,4 +1,4 @@
-package com.example.ui.home
+﻿package com.example.ui.home
 
 import com.example.ui.theme.SectionHeader
 import com.example.ui.theme.SuzieeTagChip
@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.R
+import com.example.data.preferences.HomeRailConfig
 import com.example.domain.model.Track
 import com.example.playback.MusicPlayerManager
 import com.example.ui.components.TrackRowItem
@@ -88,6 +89,7 @@ fun HomeScreen(
     onOpenImportPlaylist: () -> Unit = {},
     onOpenLibrary: () -> Unit = {},
     onOpenDownloads: () -> Unit = {},
+    onSmartDownloadTrack: ((Track) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val reducedMotion = LocalReducedMotion.current
@@ -95,7 +97,20 @@ fun HomeScreen(
     val recentlyPlayed by playerManager.repository.getRecentlyPlayed(15).collectAsState(initial = emptyList())
     val playlists by playerManager.repository.getPlaylists().collectAsState(initial = emptyList())
     val downloadedTracks by playerManager.repository.getDownloadedTracks().collectAsState(initial = emptyList())
+    val homeRails by playerManager.preferences.homeRails.collectAsState(initial = HomeRailConfig.defaults)
+    val smartDownload by playerManager.preferences.isSmartDownloadEnabled.collectAsState(initial = false)
+    val favorites by playerManager.repository.getFavorites().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
+
+    var offlineBytes by remember { mutableStateOf(0L) }
+    LaunchedEffect(downloadedTracks) {
+        offlineBytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            downloadedTracks.sumOf { track ->
+                val path = track.localFilePath
+                if (path.isNullOrBlank()) 0L else java.io.File(path).length()
+            }
+        }
+    }
 
     val popularSearchTags = listOf(
         "Anime Opening 2024",
@@ -194,16 +209,35 @@ fun HomeScreen(
             }
         }
 
-        // 2. Hero: the cinematic Mikasa panel is exclusive to Aurora Glass. The other two themes
-        // get an interactive trending-anime showcase, so each home page reads as its own experience.
+        // 2. Hero: the cinematic Mikasa panel is exclusive to Aurora Glass. Clay and Minimal each
+        // get their own hero so the three home pages read as three different experiences
+        // (P3-8), instead of falling back to the generic trending showcase.
         item {
-            if (SuzieeTheme.colors.isGlass) {
-                AuroraHeroPanel(
+            when {
+                SuzieeTheme.colors.isGlass -> AuroraHeroPanel(
                     playbackState = playbackState,
                     reducedMotion = reducedMotion,
                     onDiscover = { onNavigateToSearch("Anime Opening") }
                 )
-            } else {
+
+                SuzieeTheme.colors.isClay -> ClayHeroPanel(
+                    playbackState = playbackState,
+                    reducedMotion = reducedMotion,
+                    onDiscover = { onNavigateToSearch("Anime Opening") }
+                )
+
+                else -> MinimalHeroPanel(
+                    playbackState = playbackState,
+                    reducedMotion = reducedMotion,
+                    onDiscover = { onNavigateToSearch("Anime Opening") }
+                )
+            }
+        }
+
+        // 2a. Trending showcase: the anime rail is still the extra content air for the
+        // non-glass themes, now *below* their own hero.
+        item {
+            if (!SuzieeTheme.colors.isGlass) {
                 AnimeTrendingShowcase(
                     playerManager = playerManager,
                     onOpenFullSearch = onNavigateToSearch,
@@ -286,74 +320,75 @@ fun HomeScreen(
             }
         }
 
-        // 3b. Trending Now - real, playable tracks pulled from the search backend
-        item {
+        // 3b. Configurable discovery rails (P1-13). The list and order live in DataStore;
+        // Settings owns the add/remove UI.
+        items(homeRails, key = { it.title + "|" + it.query }) { rail ->
             DiscoveryRail(
-                title = "Trending Now",
-                subtitle = "What people are playing today",
-                query = "Anime Opening",
+                title = rail.title,
+                subtitle = rail.subtitle,
+                query = rail.query,
                 playerManager = playerManager,
                 onOpenFullSearch = onNavigateToSearch
             )
         }
 
-        // 3c. Popular / recommended picks
-        item {
-            DiscoveryRail(
-                title = "Popular This Week",
-                subtitle = "Hand-picked J-Music favourites",
-                query = "J-Pop Hits",
-                playerManager = playerManager,
-                onOpenFullSearch = onNavigateToSearch
-            )
-        }
-
-        // 3d. Mainstream Trending - for general listeners, kept fully separate from the
-        // anime rails above (which stay exactly as they were).
-        item {
-            DiscoveryRail(
-                title = "Bollywood & Hindi Hits",
-                subtitle = "Mainstream trending in India",
-                query = "Bollywood Top Songs",
-                playerManager = playerManager,
-                onOpenFullSearch = onNavigateToSearch
-            )
-        }
-        item {
-            DiscoveryRail(
-                title = "Global Top Hits",
-                subtitle = "English & international chart-toppers",
-                query = "Top English Hits This Week",
-                playerManager = playerManager,
-                onOpenFullSearch = onNavigateToSearch
-            )
-        }
-
-        // 4. Recently Played / Continue Listening
+        // 4. Continue Listening (P1-14): grouped by artist so a return visit reads as a
+        // set of listening threads, not a flat list. The active track gets a progress ring.
         if (recentlyPlayed.isNotEmpty()) {
             item {
                 SectionHeader(
-                    title = "Recently Played",
+                    title = "Continue Listening",
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
                 )
             }
 
-            items(recentlyPlayed.take(5)) { track ->
-                TrackRowItem(
-                    track = track,
-                    isCurrentTrack = playbackState.currentTrack?.id == track.id,
-                    isPlaying = playbackState.isPlaying,
-                    onClick = { playerManager.playTrack(track, recentlyPlayed) },
-                    onFavoriteToggle = {
-                        scope.launch {
-                            playerManager.repository.toggleFavorite(track)
-                        }
-                    },
-                    onAddToPlaylist = { onTrackOptions(track) },
-                    onPlayNext = { playerManager.playNext(track) },
-                    onAddToQueue = { playerManager.addToQueue(track) },
-                    modifier = Modifier.padding(horizontal = 12.dp)
-                )
+            val continueGroups = recentlyPlayed.take(8).groupBy { it.artist.ifBlank { "Unknown Artist" } }
+            continueGroups.entries.take(3).forEach { entry ->
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = entry.key,
+                            color = SuzieeTheme.colors.accentSecondary,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "${entry.value.size} track${if (entry.value.size == 1) "" else "s"}",
+                            color = SuzieeTheme.colors.textMuted,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+                items(entry.value) { track ->
+                    val progress = if (playbackState.currentTrack?.id == track.id && playbackState.durationMs > 0) {
+                        (playbackState.currentPositionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
+                    } else {
+                        null
+                    }
+                    TrackRowItem(
+                        track = track,
+                        isCurrentTrack = playbackState.currentTrack?.id == track.id,
+                        isPlaying = playbackState.isPlaying,
+                        progress = progress,
+                        onClick = { playerManager.playTrack(track, recentlyPlayed) },
+                        onFavoriteToggle = {
+                            scope.launch {
+                                playerManager.repository.toggleFavorite(track)
+                            }
+                        },
+                        onAddToPlaylist = { onTrackOptions(track) },
+                        onPlayNext = { playerManager.playNext(track) },
+                        onAddToQueue = { playerManager.addToQueue(track) },
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
             }
         } else {
             // Empty state helper
@@ -412,6 +447,111 @@ fun HomeScreen(
                     onAddToQueue = { playerManager.addToQueue(track) },
                     modifier = Modifier.padding(horizontal = 12.dp)
                 )
+            }
+        }
+
+        // 6. Offline Hub (P1-15): storage usage, one-tap offline playback and opt-in
+        // smart download of saved favourites.
+        item {
+            OfflineHubCard(
+                trackCount = downloadedTracks.size,
+                bytes = offlineBytes,
+                smartDownload = smartDownload,
+                onToggleSmartDownload = { enabled ->
+                    scope.launch {
+                        playerManager.preferences.setSmartDownloadEnabled(enabled)
+                        if (enabled) {
+                            favorites
+                                .filterNot { it.isDownloaded }
+                                .take(10)
+                                .forEach { favorite -> onSmartDownloadTrack?.invoke(favorite) }
+                        }
+                    }
+                },
+                onPlayAll = {
+                    if (downloadedTracks.isNotEmpty()) {
+                        playerManager.playTrack(downloadedTracks.first(), downloadedTracks)
+                    } else {
+                        onOpenDownloads()
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun OfflineHubCard(
+    trackCount: Int,
+    bytes: Long,
+    smartDownload: Boolean,
+    onToggleSmartDownload: (Boolean) -> Unit,
+    onPlayAll: () -> Unit
+) {
+    val sizeText = when {
+        bytes >= 1024L * 1024L * 1024L -> String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024L * 1024L -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024L -> String.format(java.util.Locale.US, "%.0f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+        SectionHeader(
+            title = "Offline Hub",
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+        )
+        ThemedCard(shape = RoundedCornerShape(20.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "$trackCount offline track${if (trackCount == 1) "" else "s"}",
+                            color = SuzieeTheme.colors.textPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "$sizeText stored on this device",
+                            color = SuzieeTheme.colors.textSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Button(
+                        onClick = onPlayAll,
+                        colors = ButtonDefaults.buttonColors(containerColor = SuzieeTheme.colors.accentPrimary)
+                    ) {
+                        Text(
+                            text = if (trackCount == 0) "Browse" else "Play all",
+                            color = SuzieeTheme.colors.bgPrimary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Smart Download",
+                            color = SuzieeTheme.colors.textPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "Keep your favourites available offline automatically",
+                            color = SuzieeTheme.colors.textSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = smartDownload,
+                        onCheckedChange = onToggleSmartDownload
+                    )
+                }
             }
         }
     }

@@ -20,9 +20,12 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import coil.imageLoader
+import coil.request.ImageRequest
 import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
 import com.example.data.remote.innertube.InnerTubeApiClient
+import com.example.data.remote.lastfm.LastFmClient
 import com.example.data.remote.streaming.OnlineStreamResolver
 import com.example.data.repository.MusicRepository
 import com.example.domain.model.StreamInfo
@@ -37,6 +40,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -60,7 +64,7 @@ data class PlaybackState(
 class MusicPlayerManager(
     private val context: Context,
     private val database: SuzieeDatabase,
-    private val preferences: SuzieePreferences,
+    val preferences: SuzieePreferences,
     val repository: MusicRepository = MusicRepository(database)
 ) {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -195,6 +199,61 @@ class MusicPlayerManager(
     /** ENDED is delivered again by some players/OEM controllers; advance at most once. */
     private var lastHandledEndedMediaId: String? = null
 
+    /** Last.fm (P3-4) opt-in state. Null until every credential has been supplied. */
+    @Volatile
+    private var lastFmClient: LastFmClient? = null
+
+    /** The track id already reported as "now playing", so a re-play does not re-send it. */
+    private var lastFmNowPlayingId: String? = null
+
+    /** Ids that have already been scrobbled, so a replay is only counted once. */
+    private val lastFmScrobbledIds = mutableSetOf<String>()
+
+    /**
+     * Rebuilds the Last.fm client from the three opt-in preferences. Reads both credentials
+     * synchronously from the DataStore snapshot on first call; the collector re-invokes this
+     * on every change, so a freshly pasted session key becomes usable immediately.
+     */
+    private fun rebuildLastFmClient() {
+        scope.launch {
+            val enabled = preferences.isLastFmEnabled.first()
+            val key = preferences.lastFmApiKey.first()
+            val session = preferences.lastFmSessionKey.first()
+            lastFmClient = if (enabled && key.isNotBlank() && session.isNotBlank()) {
+                LastFmClient(key, session).also {
+                    lastFmNowPlayingId = null
+                }
+            } else {
+                null
+            }
+        }
+    }
+
+    /** P3-4: report the track as playing to Last.fm, when the user opted in. */
+    private fun reportNowPlayingToLastFm(track: Track) {
+        if (lastFmNowPlayingId == track.id) return
+        lastFmNowPlayingId = track.id
+        val client = lastFmClient ?: return
+        scope.launch {
+            runCatching { client.updateNowPlaying(track) }
+        }
+    }
+
+    /** P3-4: count a finished play to Last.fm, once per track. */
+    private fun scrobbleToLastFm(track: Track) {
+        if (lastFmScrobbledIds.contains(track.id)) return
+        lastFmScrobbledIds.add(track.id)
+        val client = lastFmClient ?: return
+        scope.launch {
+            runCatching { client.scrobble(track) }
+        }
+    }
+
+    /** P3-4: forget per-session state when the user resets the queue/track. */
+    private fun resetLastFmSession() {
+        lastFmNowPlayingId = null
+    }
+
     /** When the current request was made; used to log startup latency. */
     private var requestStartedAtMs = 0L
 
@@ -206,6 +265,20 @@ class MusicPlayerManager(
         // here and kept up to date by the collector; cheap and never blocks the UI.
         scope.launch {
             preferences.isAutoplayEnabled.collect { autoplayEnabled = it }
+        }
+
+        // Build the Last.fm client only when the user has enabled scrobbling *and* supplied
+        // credentials. A partial setup (enabled but no key) simply stays disabled.
+        // Each collector updates its own field and rebuilds, so a change to any of the three
+        // Settings values is reflected immediately.
+        scope.launch {
+            preferences.isLastFmEnabled.collect { rebuildLastFmClient() }
+        }
+        scope.launch {
+            preferences.lastFmApiKey.collect { rebuildLastFmClient() }
+        }
+        scope.launch {
+            preferences.lastFmSessionKey.collect { rebuildLastFmClient() }
         }
 
         exoPlayer.addListener(object : Player.Listener {
@@ -388,6 +461,24 @@ class MusicPlayerManager(
         }
 
         resolveAndStartPlayback(track)
+        // Warm Coil's cache for the next song so the art is already decoded when it starts.
+        preloadArtworkFor(selection.currentIndex + 1)
+    }
+
+    /**
+     * P1-4: prefetch the next track's artwork. Runs on Coil's own executor, so this only
+     * queues work and never blocks the playback path.
+     */
+    private fun preloadArtworkFor(index: Int) {
+        val url = _playbackState.value.queue.getOrNull(index)?.artworkUrl ?: return
+        if (url.isBlank()) return
+        try {
+            context.imageLoader.enqueue(
+                ImageRequest.Builder(context).data(url).build()
+            )
+        } catch (e: Exception) {
+            Log.d(TAG, "Artwork preload skipped: ${e.message}")
+        }
     }
 
     /**
@@ -581,6 +672,11 @@ class MusicPlayerManager(
         }
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
+
+        // P3-4: report "now playing" once per track. Skipped entirely when the user has
+        // not opted into Last.fm, in which case lastFmClient is null.
+        resetLastFmSession()
+        reportNowPlayingToLastFm(track)
     }
 
     fun togglePlayPause() {
@@ -646,6 +742,7 @@ class MusicPlayerManager(
         val track = _playbackState.value.queue.getOrNull(index) ?: return
         _playbackState.update { it.copy(currentIndex = index, currentTrack = track) }
         resolveAndStartPlayback(track)
+        preloadArtworkFor(index + 1)
     }
 
     fun playNext() {
@@ -806,6 +903,10 @@ class MusicPlayerManager(
 
     private fun handlePlaybackEnded() {
         val state = _playbackState.value
+
+        // P3-4: a track that ran to the end has been genuinely listened to, so it counts as a
+        // valid Last.fm play. No-op when the user has not opted in (lastFmClient is null).
+        state.currentTrack?.let { scrobbleToLastFm(it) }
 
         // Repeat ONE: replay the current track. ExoPlayer's own repeat is OFF, so this is
         // the only place it can happen.

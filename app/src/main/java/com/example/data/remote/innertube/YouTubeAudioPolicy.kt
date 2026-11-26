@@ -54,14 +54,37 @@ internal object YouTubeAudioPolicy {
     }
 
     /**
-     * Picks the best audio-only format.
+     * User-selectable download/stream quality tier (P2-10).
      *
-     * Preference: Opus 251 (160 kbps, WebM) → AAC 140 (128 kbps, MP4) → the highest-bitrate
-     * remaining audio entry. Formats without a direct `url` are skipped: YouTube's web
-     * clients now report SABR-only entries (`serverAbrStreamingUrl`) that ExoPlayer cannot
-     * play, which is exactly why the old WebView capture stopped working.
+     * The itag lists are preferences, not requirements: when the requested itag is absent
+     * the policy falls back to the best remaining audio entry, so a video that only offers
+     * AAC still plays.
      */
-    fun pickAudioFormat(formats: List<RawAudioFormat>): AudioFormat? {
+    enum class AudioQuality(val preferredItags: List<Int>) {
+        HIGH(listOf(251, 140)),
+        MEDIUM(listOf(140, 251)),
+        LOW(listOf(250, 139, 251, 140))
+    }
+
+    fun qualityFromPreference(value: String?): AudioQuality = when (value?.lowercase()) {
+        "low", "data_saver" -> AudioQuality.LOW
+        "medium", "standard" -> AudioQuality.MEDIUM
+        else -> AudioQuality.HIGH
+    }
+
+    /**
+     * Picks the best audio-only format for [quality].
+     *
+     * Preference: the tier's itag list in order (default: Opus 251 160 kbps → AAC 140
+     * 128 kbps) → the highest-bitrate remaining audio entry. Formats without a direct
+     * `url` are skipped: YouTube's web clients now report SABR-only entries
+     * (`serverAbrStreamingUrl`) that ExoPlayer cannot play, which is exactly why the old
+     * WebView capture stopped working.
+     */
+    fun pickAudioFormat(
+        formats: List<RawAudioFormat>,
+        quality: AudioQuality = AudioQuality.HIGH
+    ): AudioFormat? {
         val playable = formats.mapNotNull { format ->
             val url = format.url?.trim().orEmpty()
             if (!isPlayableMediaUrl(url)) return@mapNotNull null
@@ -70,10 +93,10 @@ internal object YouTubeAudioPolicy {
         }
         if (playable.isEmpty()) return null
 
-        val (chosen, mime) = playable.firstOrNull { it.first.itag == 251 }
-            ?: playable.firstOrNull { it.first.itag == 140 }
-            ?: playable.maxByOrNull { it.first.bitrate }
-            ?: return null
+        val preferred = playable.firstOrNull { (format, _) ->
+            quality.preferredItags.contains(format.itag)
+        }
+        val (chosen, mime) = preferred ?: playable.maxByOrNull { it.first.bitrate } ?: return null
 
         return AudioFormat(chosen.url!!.trim(), mime, chosen.itag)
     }

@@ -10,6 +10,7 @@ import com.example.data.local.entities.PlaylistTrackCrossRef
 import com.example.data.local.entities.TrackEntity
 import com.example.data.remote.innertube.InnerTubeApiClient
 import com.example.data.remote.lyrics.LrclibApiClient
+import com.example.data.remote.lyrics.LocalLyricsResolver
 import com.example.data.remote.lyrics.LyricsResult
 import com.example.domain.model.Playlist
 import com.example.domain.model.Track
@@ -21,7 +22,8 @@ import java.util.UUID
 class MusicRepository(
     private val database: SuzieeDatabase,
     private val innerTubeApi: InnerTubeApiClient = InnerTubeApiClient(),
-    private val lrclibApi: LrclibApiClient = LrclibApiClient()
+    private val lrclibApi: LrclibApiClient = LrclibApiClient(),
+    private val localLyrics: LocalLyricsResolver = LocalLyricsResolver()
 ) {
     private val trackDao = database.trackDao()
     private val playlistDao = database.playlistDao()
@@ -59,10 +61,27 @@ class MusicRepository(
             return Result.success(LyricsResult(cached.lyricsPlain, cached.lyricsSynced, parsed))
         }
 
+        // P3-6 / P3-7: sidecar .lrc and embedded ID3 USLT come before the network so a
+        // downloaded song shows its own lyric sheet even while offline.
+        val local = localLyrics.resolveLocal(track, lrclibApi)
+        if (local != null) {
+            trackDao.updateLyrics(track.id, local.plainLyrics, local.syncedLyrics)
+            return Result.success(local)
+        }
+
         val result = lrclibApi.getLyrics(track.title, track.artist, track.durationSeconds)
         if (result.isSuccess) {
             val lyrics = result.getOrThrow()
             trackDao.updateLyrics(track.id, lyrics.plainLyrics, lyrics.syncedLyrics)
+            return result
+        }
+
+        // P3-5: last-resort Genius page scrape before giving up.
+        val genius = localLyrics.fetchGeniusLyrics(track)
+        if (!genius.isNullOrBlank()) {
+            val fallback = LyricsResult(plainLyrics = genius)
+            trackDao.updateLyrics(track.id, genius, null)
+            return Result.success(fallback)
         }
         return result
     }

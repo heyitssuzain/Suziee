@@ -87,7 +87,10 @@ class YouTubeAudioResolver(context: Context) {
      * On a stale/refused session the visitor data is refreshed and the request is retried
      * with the fallback client, so a long-lived app recovers without a restart.
      */
-    suspend fun resolve(videoId: String): StreamInfo? = withContext(Dispatchers.IO) {
+    suspend fun resolve(
+        videoId: String,
+        quality: YouTubeAudioPolicy.AudioQuality = YouTubeAudioPolicy.AudioQuality.HIGH
+    ): StreamInfo? = withContext(Dispatchers.IO) {
         if (!YouTubeAudioPolicy.isVideoId(videoId)) {
             lastFailure = "not a YouTube video id: $videoId"
             Log.w(TAG, lastFailure!!)
@@ -105,15 +108,15 @@ class YouTubeAudioResolver(context: Context) {
         // Fast path: ANDROID with the testsuite params. Fallback: IOS with the same
         // params, then one fresh-session retry. Both return normal signed URLs; Android-VR
         // is unusable now because googlevideo gates its media behind a GVS PO token.
-        var resolved = requestPlayer(current, videoId, Client.ANDROID)
-            ?: requestPlayer(current, videoId, Client.IOS)
+        var resolved = requestPlayer(current, videoId, Client.ANDROID, quality)
+            ?: requestPlayer(current, videoId, Client.IOS, quality)
 
         if (resolved == null) {
             Log.w(TAG, "Both clients failed for $videoId (${lastFailure}); refreshing session")
             val refreshed = ensureSession(refresh = true)
             if (refreshed != null) {
-                resolved = requestPlayer(refreshed, videoId, Client.ANDROID)
-                    ?: requestPlayer(refreshed, videoId, Client.IOS)
+                resolved = requestPlayer(refreshed, videoId, Client.ANDROID, quality)
+                    ?: requestPlayer(refreshed, videoId, Client.IOS, quality)
             }
         }
 
@@ -216,7 +219,8 @@ class YouTubeAudioResolver(context: Context) {
     private fun requestPlayer(
         session: Session,
         videoId: String,
-        clientType: Client
+        clientType: Client,
+        quality: YouTubeAudioPolicy.AudioQuality
     ): Resolved? {
         val requestBody = JSONObject().apply {
             put("context", JSONObject().apply {
@@ -276,7 +280,7 @@ class YouTubeAudioResolver(context: Context) {
                 formats += streamingData.optJSONArray("adaptiveFormats").toRawFormats()
                 formats += streamingData.optJSONArray("formats").toRawFormats()
 
-                val picked = YouTubeAudioPolicy.pickAudioFormat(formats)
+                val picked = YouTubeAudioPolicy.pickAudioFormat(formats, quality)
                 if (picked == null) {
                     lastFailure = "${clientType.name} returned only SABR/unplayable formats " +
                         "(${formats.size} entries)"

@@ -52,5 +52,10 @@ data class Playlist(
 
 data class LyricsLine(
     val timeMs: Long,
-    val text: String
+    val text: String,
+    /**
+     * Optional second-language line from a bilingual LRC (same timestamp as [text]).
+     * Shown beneath the original when the translation toggle is on.
+     */
+    val translation: String? = null
 )

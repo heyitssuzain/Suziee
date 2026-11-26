@@ -26,7 +26,13 @@ class SuzieeApplication : Application(), ImageLoaderFactory {
      * and so every track row can observe live progress from the same source.
      */
     val downloadManager: DownloadManager by lazy {
-        DownloadManager(this, database, playerManager.repository, playerManager.streamResolver)
+        DownloadManager(
+            this,
+            database,
+            playerManager.repository,
+            playerManager.streamResolver,
+            preferences
+        )
     }
 
     override fun onCreate() {

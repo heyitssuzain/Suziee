@@ -1,6 +1,7 @@
 package com.example.data.remote.streaming
 
 import android.content.Context
+import com.example.data.remote.innertube.YouTubeAudioPolicy
 import com.example.data.remote.innertube.YouTubeAudioResolver
 import com.example.domain.model.StreamInfo
 
@@ -43,8 +44,11 @@ class OnlineStreamResolver(context: Context) {
      * The requested id is the only id sent to YouTube; no substitute recording is ever
      * searched for or played.
      */
-    suspend fun resolve(videoId: String): ResolvedStream? {
-        val info = api.resolve(videoId) ?: return null
+    suspend fun resolve(
+        videoId: String,
+        quality: YouTubeAudioPolicy.AudioQuality = YouTubeAudioPolicy.AudioQuality.HIGH
+    ): ResolvedStream? {
+        val info = api.resolve(videoId, quality) ?: return null
         return ResolvedStream(info, StreamSource.INNERTUBE)
     }
 

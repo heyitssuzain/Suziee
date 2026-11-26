@@ -42,6 +42,21 @@
         </activity>
 
         <!--
+            FileProvider lets the playlist exporter (P2-5) hand a JSON file to the system
+            share sheet without granting broad storage access. cachePath is the export's
+            destination, so nothing outside the app's private cache is ever exposed.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <!--
             The one and only media session service: the system notification panel, the lock
             screen, Bluetooth controls and Android Auto all bind to it. Media3 promotes it to
             a foreground service (type mediaPlayback) while playback is active.

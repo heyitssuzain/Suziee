@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!--
+        Playlist exports (P2-5) are written into the app's internal cache directory and
+        handed to the system share sheet through the FileProvider above. Only that
+        directory is shared; nothing else in the app's storage is ever exposed.
+    -->
+    <cache-path name="exports" path="." />
+</paths>
