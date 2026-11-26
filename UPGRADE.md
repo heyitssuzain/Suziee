@@ -1006,7 +1006,7 @@ PHASE 4 (Week 10+): P3 Premium
 
 ---
 
-## HIGH PRIORITY — SECRET ROMANTIC EASTER EGG FOR PRERNA ❤️
+## HIGH PRIORITY — SECRET ROMANTIC EASTER EGG ❤️
 
 This feature is a personal dedication to Prerna. It must be implemented with care, beauty, and emotional meaning.
 
@@ -1035,17 +1035,17 @@ This feature is a personal dedication to Prerna. It must be implemented with car
 
 **Trigger:** Tapping "A Little Secret ❤️" entry opens a dedicated password screen/dialog.
 
-**Password:** `PRERNA` (case-sensitive, exact match required)
+**Password:** stored only as a SHA-256 digest. The key itself is deliberately **not** written anywhere in this repository, this document, Gradle, logs or the APK. (Case-sensitive, exact match required.)
 
 **Security Requirements:**
-- **NEVER hardcode the literal password `PRERNA` in any committed source file** (Kotlin, XML, Gradle, JSON, etc.)
+- **NEVER commit the key, in any file** (Kotlin, XML, Gradle, JSON, Markdown, etc.)
 - **NEVER expose in logs, build output, GitHub Actions, APK strings, or debug output**
-- Store only a **SHA-256 hash** of the password in the codebase
-- At build time, compute `SHA-256("PRERNA")` and embed the hash constant
+- Store only a **SHA-256 hash** of the key in the codebase
+- Compute the digest once, offline, and commit only the digest constant
 - At runtime, hash user input with SHA-256 and compare to stored hash
-- This prevents the password from appearing in source control or APK string tables
+- This prevents the key from appearing in source control or APK string tables
 
-**Hash to embed:** `SHA-256("PRERNA") = 8d9f7e3b5c1a2f4e6d8c0b3a5f7e9d1c3b5a7f9e1d3c5b7a9f1e3d5c7b9a1f3` (example - compute actual at implementation)
+**Hash to embed:** `2f179498ae6fe37dd0ff6f480c6da1fc41183ad69388ce58838055f40cc126bb` — the digest actually shipped in `security/PasswordHash.kt`
 
 **Incorrect Password Handling:**
 - Subtle shake animation on the input field
@@ -1130,27 +1130,20 @@ Modified files:
 - `SuzieePreferences.kt` — Add password hash constant (build-time generated)
 - `gradle/libs.versions.toml` — No new deps needed (use existing: `kotlinx.coroutines`, Compose animation, `androidx.security:security-crypto` if needed for hash)
 
-### PR-7: Password Hash Generation (Build-Time)
+### PR-7: Password Hash Generation (Offline, Digest Only)
 
-Add a Gradle task or KSP processor to compute SHA-256("PRERNA") at build time and generate a `BuildConstants` class:
+Compute the digest **once, offline**, and commit only the digest constant. The key must never enter the repository, so there is intentionally no Gradle task that reads it:
 
 ```kotlin
-// build.gradle.kts addition
-tasks.register("generatePasswordHash") {
-    doLast {
-        val hash = MessageDigest.getInstance("SHA-256")
-            .digest("PRERNA".toByteArray())
-            .joinToString("") { "%02x".format(it) }
-        file("app/src/main/java/com/example/security/PasswordHash.kt").writeText("""
-            package com.example.security
-            const val PRERNA_PASSWORD_HASH = "$hash"
-        """.trimIndent())
-    }
+// one-off, run by the maintainer outside the build:
+//   printf '%s' "$KEY" | sha256sum
+// then commit only the resulting hex digest:
+object PasswordHash {
+    const val DIGEST = "2f179498ae6fe37dd0ff6f480c6da1fc41183ad69388ce58838055f40cc126bb"
 }
-tasks.named("preBuild").configure { dependsOn("generatePasswordHash") }
 ```
 
-**Result:** Literal password never in source; only hash in generated file (gitignored or committed as hash-only).
+**Result:** the key never enters source control, build caches or CI logs; only the one-way digest is committed, and `PasswordHash` is kept by R8 via `proguard-rules.pro`.
 
 ### PR-8: Testing Requirements
 
@@ -1165,8 +1158,8 @@ tasks.named("preBuild").configure { dependsOn("generatePasswordHash") }
 - [ ] Music continues playing throughout
 - [ ] All 3 themes render correctly (visual verification)
 - [ ] Reduced motion respected (hearts static/pulse only)
-- [ ] No "PRERNA" string in APK (`aapt2 dump stringpool app.apk | grep -i prerna` → empty)
-- [ ] No password in Git history (`git log --all --source --full-history -S "PRERNA"` → empty)
+- [ ] No key string in the APK (`aapt2 dump stringpool app.apk | grep -i <key>` → empty)
+- [ ] No key in Git history (`git log --all --source --full-history -S <key>` → empty)
 
 ---
 

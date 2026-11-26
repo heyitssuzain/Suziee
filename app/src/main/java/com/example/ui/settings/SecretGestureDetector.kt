@@ -14,9 +14,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * Gesture modifiers behind the private dedication in Settings (PR-1).
  *
- * The gesture is deliberately awkward to trigger by accident — a two-finger **two-second**
- * hold — while still being easy on purpose. It is also the only way to reach the hidden
- * entry, so nothing in the composition, the strings or the logs ever says it exists.
+ * The primary gesture is a **triple tap on the About Suziee card within two seconds**; a
+ * two-finger two-second hold is kept as a secondary path. Both are deliberately awkward to
+ * trigger by accident while still being easy on purpose, and neither is hinted at anywhere in
+ * the UI, the strings or the logs.
  */
 
 /** How long the user gets to place the second finger after the first one goes down. */
@@ -99,8 +100,8 @@ private class TapCounter {
 /**
  * Fires [onTrigger] after [requiredTaps] taps land inside [windowMs].
  *
- * The companion to [twoFingerLongPress]: the same About section accepts either one, so the
- * secret stays reachable whether the person holds with two fingers or taps three times.
+ * This is the gesture wired to the About Suziee card. The two-finger hold in
+ * [twoFingerLongPress] is an optional secondary path for the same action.
  */
 @Composable
 fun Modifier.tripleTapWithin(

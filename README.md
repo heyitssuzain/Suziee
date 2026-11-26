@@ -6,10 +6,10 @@
 
 <p align="center">
   <a href="https://github.com/heyitssuzain/Suziee/releases/latest"><img alt="Download latest APK" src="https://img.shields.io/badge/Download-Suziee.apk-00E5CC?style=for-the-badge&logo=android&logoColor=white" /></a>
-  <a href="https://github.com/heyitssuzain/Suziee/releases/latest"><img alt="Version" src="https://img.shields.io/badge/version-1.2-blueviolet?style=for-the-badge" /></a>
+  <a href="https://github.com/heyitssuzain/Suziee/releases/latest"><img alt="Version" src="https://img.shields.io/badge/version-1.3-blueviolet?style=for-the-badge" /></a>
 </p>
 
-Suziee is a native Android music player crafted with **Kotlin** and **Jetpack Compose**, featuring an anime-inspired cybernetic visual identity, atmospheric motion graphics, real online music discovery, background playback with **Media3 ExoPlayer**, offline music downloads, persistent **Room** database storage, synchronized **LRCLIB** lyrics, and on-device voice commands.
+Suziee is a native Android music player crafted with **Kotlin** and **Jetpack Compose**, featuring three distinct visual themes (Aurora Glass, Pink Clay and Minimal Slate), atmospheric per-theme motion, real online music discovery, background playback with **Media3 ExoPlayer**, offline music downloads, persistent **Room** storage, synchronized **LRCLIB** lyrics with translation and offset controls, and on-device voice commands.
 
 ## 📥 Download & Install
 
@@ -25,22 +25,35 @@ Grab the latest APK straight from GitHub Releases — no login, no Play Store:
 
 ## ✨ Key Features
 
+- **Three Themes, One App** — **Aurora Glass** (refractive glassmorphism), **Pink Clay** (soft claymorphism) and **Minimal Slate** (restrained mono), each with its own home hero, palette and motion.
 - **Online Music Discovery** — real search querying YouTube Music InnerTube endpoints with suggestions and metadata.
 - **Block-Resistant Streaming** — a native YouTube player-API client resolves the exact requested video to a direct audio stream in about a second, with one automatic re-resolve if a stream dies mid-playback. No Python runtime and no browser engine on the playback path.
+- **Download Quality Tiers** — pick High / Medium / Data-saver for downloads; the resolver walks the tier's own itag list so the order YouTube returns never downgrades you.
 - **Notification & Lock Screen Controls** — title, artist and artwork with working Play/Pause, Next and Previous via Media3 `MediaSessionService`.
 - **Offline Downloads** — save permitted streams (progressive + HLS stitch) into app-private storage with live progress, percentage and retry-on-failure; fully playable offline.
+- **Offline Hub** — storage usage, one-tap "play all offline" and an opt-in Smart Download switch on the Home screen.
+- **Configurable Home Rails** — add, remove and reset discovery rails (title + search query) from Settings.
+- **Continue Listening** — grouped by artist with a per-track progress ring, so resuming is one tap.
 - **Trending For Everyone** — anime trending sections **plus** mainstream sections for general listeners (Bollywood, Hindi, English and international hits).
-- **Synced & Plain Lyrics** — LRCLIB integration with synchronized timestamped lyrics and active line highlighting.
+- **Rich Lyrics** — LRCLIB synced and plain lyrics, word-by-word colour following, bilingual translation with an **A文** toggle, ±5 s offset in Settings, and three local fallbacks: sidecar `.lrc` files, ID3v2 `USLT` tags and a Genius scrape.
+- **System Equalizer** — real device equalizer with presets, plus a reactive canvas visualizer.
+- **Sleep Timer** — fade-out timer from the player.
+- **Search That Remembers** — persisted recent searches plus Songs / Artists tabs.
 - **Voice Commands** — on-device speech recognition: *"Play Believer"*, *"Next"*, *"Pause"*, *"Resume"*, *"Open lyrics"*, *"Play my downloads"*.
-- **Playlists & Library** — Room-backed persistent storage for custom playlists, favorites and deduplicated playback history.
-- **Anime Aesthetic** — original character artwork, glowing neon cyan/violet palette, reactive equalizer canvas visualizer and a 5-stage opening experience.
+- **Playlists & Library** — Room-backed persistent storage for custom playlists, favorites and deduplicated playback history, with **JSON playlist export** through the system share sheet.
+- **Optional Last.fm Scrobbling** — off by default; you supply your own API and session keys in Settings, and nothing is sent unless you enable it.
+- **Polished Detail** — Coil artwork crossfades, next-track artwork prefetch, haptic feedback on core controls, and cache stats with a one-tap clear.
 
-## 🆕 What's New in v1.2
+## 🆕 What's New in v1.3
 
-- Mainstream trending rails on Home: **Bollywood & Hindi Hits** and **Global Top Hits** (anime rails unchanged).
-- Live download feedback right where you tap: progress ring + percentage on the track row and in the player.
-- Faster song starts, automatic failover when a stream dies mid-playback, and long downloads with retry + dismiss/retry states.
-- Media notification and lock-screen playback controls.
+- **Themes everywhere** — Pink Clay and Minimal Slate now get their own home heroes instead of the glass one.
+- **More control over Home** — configurable discovery rails and a Continue Listening row grouped by artist.
+- **Offline Hub** — see how much space downloads use, play everything offline, or opt into Smart Download.
+- **Lyrics that fit you** — translation toggle, sync offset and three extra local sources.
+- **Real device equalizer, sleep timer and haptics** across the core controls.
+- **Download quality tiers**, **bilingual search tabs** with recent queries, and **JSON playlist export**.
+- **Optional Last.fm scrobbling** with credentials you own.
+- **Private easter egg** — a hidden dedication lives behind a deliberately obscure gesture in Settings. Its key is never stored in the app, the APK or this repository; only a one-way SHA-256 digest is committed.
 
 ## 🏗 Architecture
 
@@ -76,4 +89,9 @@ The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## 🔒 Privacy-First
 
-No signup, no mandatory accounts, no ads, no tracking.
+No signup, no mandatory accounts, no ads, no tracking, no analytics SDKs.
+
+- Everything except stream resolution and lyrics lookup happens on-device.
+- Downloads, playlists, favorites, history and settings live in app-private storage.
+- **Last.fm scrobbling is opt-in and off by default.** Nothing is sent unless you paste your own API and session keys into Settings and flip the switch; no keys are bundled with the app.
+- The hidden dedication is local-only and never persisted: leaving Settings forgets it. Only a one-way SHA-256 digest of its key exists in the code.

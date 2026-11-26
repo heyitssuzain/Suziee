@@ -10,6 +10,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -52,6 +53,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -80,12 +82,36 @@ fun PasswordDialog(
 ) {
     var input by remember { mutableStateOf("") }
     var isWrong by remember { mutableStateOf(false) }
+    var isPasswordVisible by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
 
     // Shake offset driven by a single animation; paused whenever nothing is wrong so an
     // idle dialog costs nothing.
     val shake = remember { Animatable(0f) }
+
+    // A single submit path shared by the Enter button and the keyboard's Done key, so the
+    // two can never disagree about what a correct password does.
+    val submit: () -> Unit = {
+        if (PasswordHash.matches(input)) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            onAuthenticated()
+        } else {
+            isWrong = true
+            input = ""
+            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            scope.launch {
+                shake.animateTo(0f)
+                // A short left/right wobble: enough to read as "no", not enough to feel
+                // like an error state on the phone.
+                repeat(3) {
+                    shake.animateTo(14f, tween(60, easing = FastOutSlowInEasing))
+                    shake.animateTo(-14f, tween(60, easing = FastOutSlowInEasing))
+                }
+                shake.animateTo(0f, tween(90))
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -124,11 +150,29 @@ fun PasswordDialog(
                         isWrong = false
                     },
                     singleLine = true,
-                    // The key is a name, never a word, so the mask must not offer autofill
-                    // suggestions: no keyboard type hints, no correction, no prediction.
-                    visualTransformation = PasswordVisualTransformation(),
+                    // Masked by default, with an explicit Show/Hide toggle so the person can
+                    // check what they typed before submitting. No keyboard type hints, no
+                    // autocorrect and no predictions: autofill must never offer to save it.
+                    visualTransformation = if (isPasswordVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { }),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    trailingIcon = {
+                        Text(
+                            text = if (isPasswordVisible) "Hide" else "Show",
+                            color = SuzieeTheme.colors.accentPrimary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { isPasswordVisible = !isPasswordVisible }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .testTag("secret_password_toggle")
+                        )
+                    },
                     placeholder = { Text("â€¦", color = SuzieeTheme.colors.textMuted) },
                     isError = isWrong,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -157,26 +201,7 @@ fun PasswordDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = {
-                    if (PasswordHash.matches(input)) {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onAuthenticated()
-                    } else {
-                        isWrong = true
-                        input = ""
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        scope.launch {
-                            shake.animateTo(0f)
-                            // A short left/right wobble: enough to read as "no", not enough
-                            // to feel like an error state on the phone.
-                            repeat(3) {
-                                shake.animateTo(14f, tween(60, easing = FastOutSlowInEasing))
-                                shake.animateTo(-14f, tween(60, easing = FastOutSlowInEasing))
-                            }
-                            shake.animateTo(0f, tween(90))
-                        }
-                    }
-                },
+                onClick = submit,
                 enabled = input.isNotBlank()
             ) {
                 Text("Enter", color = SuzieeTheme.colors.accentPrimary, fontWeight = FontWeight.Bold)

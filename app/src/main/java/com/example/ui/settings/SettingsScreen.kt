@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -118,13 +119,29 @@ fun SettingsScreen(
     }
     var showSecretPassword by remember { mutableStateOf(false) }
     var showSecretRomantic by remember { mutableStateOf(false) }
+    val settingsListState = rememberLazyListState()
     val unlockSecret: () -> Unit = {
-        // PR-1 asks for a toast-style confirmation on a successful activation.
         com.example.data.preferences.SecretPrefs.reveal()
         isSecretRevealed = true
+        // PR-1 asks for a confirmation on a successful activation. A Toast is deliberately
+        // used instead of a Snackbar so it cannot be swallowed by the scrolling content.
+        android.widget.Toast.makeText(
+            context,
+            "A little secret revealed... \uD83D\uDCAB",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
     }
     DisposableEffect(Unit) {
         onDispose { com.example.data.preferences.SecretPrefs.reset() }
+    }
+    // Bring the freshly revealed entry into view; otherwise it can slide in just below the
+    // fold and look like the gesture did nothing.
+    LaunchedEffect(isSecretRevealed) {
+        if (isSecretRevealed) {
+            kotlinx.coroutines.delay(150)
+            val lastIndex = (settingsListState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+            settingsListState.animateScrollToItem(lastIndex)
+        }
     }
 
     LaunchedEffect(cacheRefresh) {
@@ -136,12 +153,17 @@ fun SettingsScreen(
         }
     }
 
-    Column(
+    // A Box, not a Column: the dedication overlay is a full-screen sibling of the scrolling
+    // content. As a Column child after a `fillMaxSize()` LazyColumn it was measured with the
+    // leftover height (zero), so it composed but never drew — that was the "vibration and
+    // nothing happens" bug.
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(SuzieeTheme.colors.bgPrimary)
             .testTag("settings_screen")
     ) {
+        Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = {
                 Text(
@@ -163,6 +185,7 @@ fun SettingsScreen(
         )
 
         LazyColumn(
+            state = settingsListState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
         ) {
@@ -693,13 +716,14 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 SettingsSectionHeader("ABOUT SUZIEE")
                 SettingsCard(
-                    // PR-1: the dedication unlocks here. A two-finger two-second hold on
-                    // this exact card — and nothing else in the app — reveals the hidden
-                    // entry at the very bottom of Settings. No UI hint exists on purpose,
-                    // and the gesture is intentionally awkward to hit by accident.
-                    modifier = Modifier.twoFingerLongPress(holdDurationMs = 2_000L) {
-                        unlockSecret()
-                    }
+                    // PR-1: three taps on this card within two seconds unlock the hidden
+                    // entry at the very bottom of Settings. Nothing in the UI hints that the
+                    // gesture exists, and it is awkward enough that it never fires by
+                    // accident while scrolling.
+                    modifier = Modifier.tripleTapWithin(
+                        requiredTaps = 3,
+                        windowMs = 2_000L
+                    ) { unlockSecret() }
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -708,13 +732,7 @@ fun SettingsScreen(
                                 text = "Suziee Music Player v1.0",
                                 color = SuzieeTheme.colors.textPrimary,
                                 fontWeight = FontWeight.Bold,
-                                // The original spec also accepts a triple-tap on the version
-                                // text. It lives here, on its own element, so the two
-                                // gesture detectors never compete for the same pointer
-                                // events and the two-finger hold stays reliable.
-                                modifier = Modifier
-                                    .padding(start = 12.dp)
-                                    .tripleTapWithin { unlockSecret() }
+                                modifier = Modifier.padding(start = 12.dp)
                             )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
@@ -744,6 +762,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+        } // end of the scrolling content column
 
         if (showEqualizer) {
             EqualizerDialog(
