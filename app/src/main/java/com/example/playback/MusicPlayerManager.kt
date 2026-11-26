@@ -165,6 +165,10 @@ class MusicPlayerManager(
     /** Real FFT capture from the active audio session, with a deterministic fallback. */
     private val visualizerManager = VisualizerManager()
 
+    /** System equalizer for the active audio session. */
+    private val equalizerManager = EqualizerManager()
+    val equalizer: EqualizerManager get() = equalizerManager
+
     /** Sleep timer: 0 means off. */
     private var sleepTimerJob: Job? = null
     private val _sleepTimerMinutes = MutableStateFlow(0)
@@ -209,6 +213,7 @@ class MusicPlayerManager(
                 _playbackState.update { it.copy(isPlaying = isPlaying) }
                 if (isPlaying) {
                     visualizerManager.attach(exoPlayer.audioSessionId)
+                    equalizerManager.attach(exoPlayer.audioSessionId)
                     startProgressTracker()
                 } else {
                     stopProgressTracker()
@@ -907,6 +912,7 @@ class MusicPlayerManager(
     fun release() {
         stopProgressTracker()
         visualizerManager.detach()
+        equalizerManager.release()
         sleepTimerJob?.cancel()
         resolveJob?.cancel()
         try {

@@ -236,6 +236,7 @@ fun SuzieeApp(
             SettingsScreen(
                 preferences = app.preferences,
                 repository = playerManager.repository,
+                playerManager = playerManager,
                 onBack = { showSettingsScreen = false },
                 onReplayIntro = {
                     showSettingsScreen = false

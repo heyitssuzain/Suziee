@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MusicNote
@@ -60,6 +61,7 @@ import androidx.compose.ui.unit.sp
 import coil.imageLoader
 import com.example.data.preferences.SuzieePreferences
 import com.example.data.repository.MusicRepository
+import com.example.playback.MusicPlayerManager
 import com.example.ui.theme.SuzieeThemeId
 import com.example.ui.theme.ThemedCard
 import com.example.ui.theme.suzieeColorsFor
@@ -73,6 +75,7 @@ import java.util.Locale
 fun SettingsScreen(
     preferences: SuzieePreferences,
     repository: MusicRepository,
+    playerManager: MusicPlayerManager,
     onBack: () -> Unit,
     onReplayIntro: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -87,6 +90,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     var cacheSummary by remember { mutableStateOf("Calculating…") }
     var cacheRefresh by remember { mutableIntStateOf(0) }
+    var showEqualizer by remember { mutableStateOf(false) }
 
     LaunchedEffect(cacheRefresh) {
         cacheSummary = withContext(Dispatchers.IO) {
@@ -249,25 +253,54 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 SettingsSectionHeader("PLAYBACK")
                 SettingsCard {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = SuzieeTheme.colors.accentPrimary)
+                    Column {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.MusicNote, contentDescription = null, tint = SuzieeTheme.colors.accentPrimary)
+                                Column(modifier = Modifier.padding(start = 12.dp)) {
+                                    Text("Autoplay Next Track", color = SuzieeTheme.colors.textPrimary, fontWeight = FontWeight.Medium)
+                                    Text("Automatically play subsequent songs in queue", color = SuzieeTheme.colors.textSecondary, fontSize = 12.sp)
+                                }
+                            }
+                            Switch(
+                                checked = isAutoplay,
+                                onCheckedChange = { scope.launch { preferences.setAutoplayEnabled(it) } },
+                                colors = SwitchDefaults.colors(checkedThumbColor = SuzieeTheme.colors.bgPrimary, checkedTrackColor = SuzieeTheme.colors.accentPrimary)
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showEqualizer = true }
+                                .padding(16.dp)
+                                .testTag("open_equalizer_row"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Equalizer,
+                                contentDescription = null,
+                                tint = SuzieeTheme.colors.accentSecondary
+                            )
                             Column(modifier = Modifier.padding(start = 12.dp)) {
-                                Text("Autoplay Next Track", color = SuzieeTheme.colors.textPrimary, fontWeight = FontWeight.Medium)
-                                Text("Automatically play subsequent songs in queue", color = SuzieeTheme.colors.textSecondary, fontSize = 12.sp)
+                                Text(
+                                    "Equalizer",
+                                    color = SuzieeTheme.colors.textPrimary,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    "Tune bass, mids and treble for the active audio session",
+                                    color = SuzieeTheme.colors.textSecondary,
+                                    fontSize = 12.sp
+                                )
                             }
                         }
-                        Switch(
-                            checked = isAutoplay,
-                            onCheckedChange = { scope.launch { preferences.setAutoplayEnabled(it) } },
-                            colors = SwitchDefaults.colors(checkedThumbColor = SuzieeTheme.colors.bgPrimary, checkedTrackColor = SuzieeTheme.colors.accentPrimary)
-                        )
                     }
                 }
             }
@@ -401,6 +434,13 @@ fun SettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(32.dp))
             }
+        }
+
+        if (showEqualizer) {
+            EqualizerDialog(
+                playerManager = playerManager,
+                onDismiss = { showEqualizer = false }
+            )
         }
     }
 }
