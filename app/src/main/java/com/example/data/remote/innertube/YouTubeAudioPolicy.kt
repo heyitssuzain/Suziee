@@ -13,7 +13,12 @@ import java.net.URI
  *  * which `adaptiveFormats` entry is a playable audio stream,
  *  * which URLs may be handed to ExoPlayer.
  */
-internal object YouTubeAudioPolicy {
+/**
+ * Public so the quality tier can cross the resolver boundary: `OnlineStreamResolver` and
+ * `YouTubeAudioResolver` accept it as a parameter and `DownloadManager` reads it out of
+ * preferences, and an `internal` object would not be visible to those public signatures.
+ */
+object YouTubeAudioPolicy {
 
     /** YouTube video ids are exactly 11 URL-safe characters. */
     private val VIDEO_ID = Regex("^[A-Za-z0-9_-]{11}$")

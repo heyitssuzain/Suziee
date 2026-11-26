@@ -244,7 +244,7 @@ fun RomanticHeartField(
             val xFraction = 0.04f + ((index * 0.2117f) % 0.92f)
             val travel = (drift + phase) % 1f
             val scale = 0.45f + ((index * 7) % 3) * 0.28f
-            val size = (14 + ((index * 11) % 5) * 5).dp
+            val heartSize = (14 + ((index * 11) % 5) * 5).dp
             val tint = palette[index % palette.size]
             val sway = if (reducedMotion) 0f else 26f * kotlin.math.sin((travel + phase) * 6.2831f)
 
@@ -252,8 +252,10 @@ fun RomanticHeartField(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
+                        // `size` here is the DrawScope's own size (the full screen), not the
+                        // heart: the heart's own dimension lives in heartSize.
                         translationX = (xFraction - 0.5f) * size.width * 3f + sway
-                        translationY = -size.height.toPx() * 14f * travel + sway * 0.2f
+                        translationY = -heartSize.toPx() * 14f * travel + sway * 0.2f
                         rotationZ = sway * 0.4f
                         val alphaFactor = if (reducedMotion) {
                             0.55f
@@ -266,7 +268,7 @@ fun RomanticHeartField(
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .size(size * scale * (if (reducedMotion) pulse else 1f))
+                        .size(heartSize * scale * (if (reducedMotion) pulse else 1f))
                 ) {
                     // The glow beneath the glyph keeps the heart legible over the message.
                     Box(
@@ -286,7 +288,7 @@ fun RomanticHeartField(
                         tint = tint,
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .size(size * scale * 0.72f)
+                            .size(heartSize * scale * 0.72f)
                     )
                 }
             }

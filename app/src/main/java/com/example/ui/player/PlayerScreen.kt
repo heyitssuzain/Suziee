@@ -192,6 +192,7 @@ fun PlayerScreen(
         if (track.artworkUrl.isNotBlank()) {
             AsyncImage(
                 model = artworkRequest,
+                contentDescription = null,
                 modifier = Modifier
                     .fillMaxSize()
                     .blur(64.dp)

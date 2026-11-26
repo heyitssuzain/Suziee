@@ -332,8 +332,8 @@ fun SecretEntryCard(
                 stiffness = Spring.StiffnessLow
             ),
             initialOffsetY = { it }
-        ) + fadeIn(tweenDuration = 350, easing = FastOutSlowInEasing),
-        exit = fadeOut(tweenDuration = 200)
+        ) + fadeIn(animationSpec = tween(350, easing = FastOutSlowInEasing)),
+        exit = fadeOut(animationSpec = tween(200))
     ) {
         Surface(
             shape = RoundedCornerShape(22.dp),

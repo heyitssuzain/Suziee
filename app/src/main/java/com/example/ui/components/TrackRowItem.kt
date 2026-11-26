@@ -138,13 +138,17 @@ fun TrackRowItem(
             }
 
             if (progress != null) {
+                // Read the palette in the composable body: the DrawScope lambda below is not
+                // a @Composable context, so `SuzieeTheme` cannot be touched from there.
+                val ringColor = SuzieeTheme.colors.accentPrimary
+                val ringWidth = 3.dp
                 Canvas(modifier = Modifier.matchParentSize().padding(2.dp)) {
                     drawArc(
-                        color = SuzieeTheme.colors.accentPrimary,
+                        color = ringColor,
                         startAngle = -90f,
                         sweepAngle = 360f * progress.coerceIn(0f, 1f),
                         useCenter = false,
-                        style = Stroke(width = 3.dp.toPx())
+                        style = Stroke(width = ringWidth.toPx())
                     )
                 }
             }
