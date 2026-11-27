@@ -6,14 +6,14 @@
 
 <p align="center">
   <a href="https://github.com/heyitssuzain/Suziee/releases/latest"><img alt="Download latest APK" src="https://img.shields.io/badge/Download-Suziee.apk-00E5CC?style=for-the-badge&logo=android&logoColor=white" /></a>
-  <a href="https://github.com/heyitssuzain/Suziee/releases/latest"><img alt="Version" src="https://img.shields.io/badge/version-1.3-blueviolet?style=for-the-badge" /></a>
+  <a href="https://github.com/heyitssuzain/Suziee/releases/latest"><img alt="Version" src="https://img.shields.io/badge/version-1.4-blueviolet?style=for-the-badge" /></a>
 </p>
 
 <p align="center">
   <img src="hero.png" alt="Suziee hero banner: Aurora Glass, Pink Clay and Minimal Slate" width="880" />
 </p>
 
-Suziee is a native Android music player crafted with **Kotlin** and **Jetpack Compose**, featuring three distinct visual themes (Aurora Glass, Pink Clay and Minimal Slate), atmospheric per-theme motion, real online music discovery, background playback with **Media3 ExoPlayer**, offline music downloads, persistent **Room** storage, synchronized **LRCLIB** lyrics with translation and offset controls, and on-device voice commands.
+Suziee is a native Android music player crafted with **Kotlin** and **Jetpack Compose**, featuring three distinct visual themes (Aurora Glass, Pink Clay and Minimal Slate), atmospheric per-theme motion, real online music discovery, background playback with **Media3 ExoPlayer**, offline music downloads, persistent **Room** storage, synchronized **LRCLIB** lyrics with translation and offset controls, on-device voice commands, and a private **Couple Space** that pairs two phones directly over **WebRTC** for encrypted chat, a shared playlist and synchronized playback.
 
 ## 📥 Download & Install
 
@@ -23,7 +23,7 @@ Grab the latest APK straight from GitHub Releases — no login, no Play Store:
 
 1. Open the downloaded `Suziee.apk` on your Android phone (Android 8+).
 2. If Android asks, allow *Install unknown apps* for your browser or file manager.
-3. Install. Updating from an earlier release? Just install on top — **no uninstall needed** and your downloads, playlists and favorites are preserved.
+3. Install. Updating from an earlier release? Just install on top — **no uninstall needed** and your downloads, playlists, favorites and Couple pairing are preserved.
 
 > The release APK is signed with a private release key. Every future update uses the same key, so all users update in place forever.
 
@@ -47,6 +47,20 @@ Grab the latest APK straight from GitHub Releases — no login, no Play Store:
 - **Playlists & Library** — Room-backed persistent storage for custom playlists, favorites and deduplicated playback history, with **JSON playlist export** through the system share sheet.
 - **Optional Last.fm Scrobbling** — off by default; you supply your own API and session keys in Settings, and nothing is sent unless you enable it.
 - **Polished Detail** — Coil artwork crossfades, next-track artwork prefetch, haptic feedback on core controls, and cache stats with a one-tap clear.
+- **Couple Space (serverless pairing)** — link two phones directly. There is no account and no backend: a three-code QR / deep-link handshake establishes a mutually authenticated peer identity, and all traffic then rides an encrypted **WebRTC DataChannel**.
+- **Private Encrypted Chat** — messages queue offline as Pending → Sent → Delivered → Failed and are only ever marked delivered by an end-to-end acknowledgement. Message bodies are never logged.
+- **Shared Playlist** — a queue separate from your personal playlists, merged event-by-event with deterministic conflict resolution so both phones converge on the same order no matter who edits first.
+- **Synchronized Playback** — the paired device follows play/pause/seek and corrects drift automatically (ignore under 300 ms, up to ±3% speed in the middle band, seek beyond that). It drives the existing player — no audio is streamed between phones.
+- **Works on Every Theme** — all eleven Couple screens use the active theme's palette with accessible contrast, whether you are on Aurora Glass, Pink Clay or Minimal Slate.
+
+## 🆕 What's New in v1.4
+
+- **Couple Space** — a private, serverless way to pair two Android phones over WebRTC, with no signup and no cloud database.
+- **Encrypted chat** with an honest offline delivery queue that is never faked as delivered.
+- **Shared playlist** built from ordered events, so edits from either phone resolve deterministically.
+- **Synchronized playback** driven through the existing player, with drift correction and no audio relaying.
+- **Eleven new Couple screens** across all three themes, hidden behind a dedicated **Couple** tab and immersive sub-screens.
+- Pairing is kept separate from the live connection and trust survives restarts; the app opens no permanent background connection and tears the link down a few seconds after you leave.
 
 ## 🆕 What's New in v1.3
 
@@ -70,6 +84,7 @@ Grab the latest APK straight from GitHub Releases — no login, no Play Store:
 | Settings | AndroidX DataStore (Preferences) |
 | Images | Coil Compose |
 | Networking | OkHttp |
+| Peer sync | WebRTC DataChannels (native) + Android Keystore identities |
 
 ## 🔨 Build
 
@@ -97,3 +112,4 @@ No signup, no mandatory accounts, no ads, no tracking, no analytics SDKs.
 - Downloads, playlists, favorites, history and settings live in app-private storage.
 - **Last.fm scrobbling is opt-in and off by default.** Nothing is sent unless you paste your own API and session keys into Settings and flip the switch; no keys are bundled with the app.
 - The hidden dedication is local-only and never persisted: leaving Settings forgets it. Only a one-way SHA-256 digest of its key exists in the code.
+- **Couple Space is peer-to-peer.** Chat, the shared playlist and playback sync travel directly between the two paired phones over an end-to-end encrypted WebRTC DataChannel; nothing is routed through or stored on any server we run. Pairing identities live in the Android Keystore, message bodies are never logged, and you can remove a peer and revoke its keys at any time.

@@ -42,6 +42,8 @@ credentials = "1.5.0"
 googleid = "1.1.1"
 media3 = "1.5.1"
 palette = "1.0.0"
+webrtc = "150.7871.09"
+zxing = "3.5.4"
 
 
 [libraries]
@@ -102,6 +104,8 @@ androidx-media3-datasource = { group = "androidx.media3", name = "media3-datasou
 androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 androidx-palette = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
+webrtc-android = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtc" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 
 
 [plugins]

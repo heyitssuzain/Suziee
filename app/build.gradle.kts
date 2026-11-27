@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.suziee.kmvpx"
     minSdk = 24
     targetSdk = 36
-    versionCode = 4
-    versionName = "1.3"
+    versionCode = 5
+    versionName = "1.4"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -130,6 +130,10 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  // Couple Space: native WebRTC (DTLS/SCTP DataChannels) and a small QR codec.
+  // No Firebase / Supabase / central backend is used by this feature.
+  implementation(libs.webrtc.android)
+  implementation(libs.zxing.core)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

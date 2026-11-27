@@ -32,6 +32,8 @@ class SuzieePreferences(private val context: Context) {
         val LASTFM_API_KEY = stringPreferencesKey("lastfm_api_key")
         val LASTFM_USERNAME = stringPreferencesKey("lastfm_username")
         val LASTFM_SESSION_KEY = stringPreferencesKey("lastfm_session_key")
+        val COUPLE_DISPLAY_NAME = stringPreferencesKey("couple_display_name")
+        val COUPLE_LAN_RECONNECT = booleanPreferencesKey("couple_lan_reconnect")
     }
 
     val isFirstLaunchCompleted: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -235,5 +237,29 @@ class SuzieePreferences(private val context: Context) {
 
     suspend fun setLastFmSessionKey(key: String) {
         context.dataStore.edit { prefs -> prefs[Keys.LASTFM_SESSION_KEY] = key.trim() }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Couple Space (local-only; no account and no cloud profile)
+    // ------------------------------------------------------------------------------------
+
+    /** The name the paired device sees. Kept locally, never sent to a server. */
+    val coupleDisplayName: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[Keys.COUPLE_DISPLAY_NAME]?.trim().orEmpty()
+    }
+
+    suspend fun setCoupleDisplayName(name: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.COUPLE_DISPLAY_NAME] = name.trim().take(40)
+        }
+    }
+
+    /** Opt-in for the best-effort same-Wi-Fi reconnect path. Off by default. */
+    val isCoupleLanReconnectEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[Keys.COUPLE_LAN_RECONNECT] ?: false
+    }
+
+    suspend fun setCoupleLanReconnectEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.COUPLE_LAN_RECONNECT] = enabled }
     }
 }

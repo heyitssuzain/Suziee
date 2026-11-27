@@ -3,6 +3,7 @@ package com.example
 import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import com.example.couple.CoupleSpaceController
 import com.example.data.local.SuzieeDatabase
 import com.example.data.preferences.SuzieePreferences
 import com.example.downloads.DownloadManager
@@ -35,6 +36,20 @@ class SuzieeApplication : Application(), ImageLoaderFactory {
         )
     }
 
+    /**
+     * The Couple Space orchestrator. It is process-scoped, owns no Activity, and only opens
+     * a peer connection while the Couple UI asks it to. Creating it is cheap: it observes a
+     * few Room flows and a DataStore preference, so people who never pair pay no network cost.
+     */
+    val coupleSpace: CoupleSpaceController by lazy {
+        CoupleSpaceController(
+            context = this,
+            database = database,
+            playerManager = playerManager,
+            preferences = preferences
+        )
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -45,6 +60,10 @@ class SuzieeApplication : Application(), ImageLoaderFactory {
         // one player-API POST away instead of two network round trips. Safe if it fails:
         // the resolver fetches a session lazily on the first play.
         playerManager.streamResolver.warmUp()
+        // Restore the persisted pairing and start observing chat/queue/playback. This does
+        // not connect to anything; it only makes the Couple tab immediately consistent after
+        // process death or a reboot.
+        coupleSpace.start()
     }
 
     /** Coil uses this loader for every AsyncImage in the app. */

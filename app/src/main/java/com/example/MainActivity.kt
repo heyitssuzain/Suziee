@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -26,10 +27,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.Search
@@ -41,6 +44,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,10 +58,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.example.couple.CoupleSpaceController
 import com.example.domain.model.Track
 import com.example.downloads.DownloadManager
 import com.example.playback.MusicPlayerManager
 import com.example.ui.components.AddToPlaylistDialog
+import com.example.ui.couple.CoupleSpaceScreen
 import com.example.ui.components.MiniPlayerBar
 import com.example.ui.components.VoiceSearchModal
 import com.example.ui.downloads.DownloadsScreen
@@ -85,7 +91,8 @@ enum class MainDestination(
     HOME("Home", Icons.Filled.Home, Icons.Outlined.Home, "nav_home"),
     SEARCH("Search", Icons.Filled.Search, Icons.Outlined.Search, "nav_search"),
     LIBRARY("Library", Icons.Filled.LibraryMusic, Icons.Outlined.LibraryMusic, "nav_library"),
-    DOWNLOADS("Downloads", Icons.Filled.Download, Icons.Outlined.Download, "nav_downloads")
+    DOWNLOADS("Downloads", Icons.Filled.Download, Icons.Outlined.Download, "nav_downloads"),
+    COUPLE("Couple", Icons.Filled.Favorite, Icons.Outlined.FavoriteBorder, "nav_couple")
 }
 
 class MainActivity : ComponentActivity() {
@@ -93,6 +100,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var playerManager: MusicPlayerManager
     private lateinit var downloadManager: DownloadManager
     private lateinit var voiceRecognizer: VoiceRecognizer
+    private lateinit var coupleSpace: CoupleSpaceController
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -118,7 +126,12 @@ class MainActivity : ComponentActivity() {
         val app = application as SuzieeApplication
         playerManager = app.playerManager
         downloadManager = app.downloadManager
+        coupleSpace = app.coupleSpace
         voiceRecognizer = VoiceRecognizer(this)
+
+        // A cold-start deep link must reach the controller before the Compose tree observes
+        // its incoming-code flow. Warm links are handled in onNewIntent below.
+        coupleSpace.handleDeepLink(intent?.data?.toString())
 
         setContent {
             val themeKey by app.preferences.themeId.collectAsState(initial = "aurora_glass")
@@ -137,14 +150,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        coupleSpace.handleDeepLink(intent.data?.toString())
+    }
+
     override fun onStart() {
         super.onStart()
+        // Couple Space only holds a peer connection while the app is foregrounded. This is
+        // also where an opt-in same-Wi-Fi reconnect is attempted.
+        coupleSpace.onForeground()
         // Requested here rather than in onCreate on purpose: a permission request launched
         // while the activity is still being created can be dropped by some OEM builds,
         // which silently left the app without POST_NOTIFICATIONS - and therefore without
         // the media notification / lock-screen controls. This runs once the activity is
         // actually started, and the previous failure path (a swallowed exception) is logged.
         requestNotificationPermissionIfNeeded()
+    }
+
+    override fun onStop() {
+        // Give a short grace period for rotation and quick app switches, then close the
+        // encrypted session. There is no foreground service and no permanent background
+        // socket; pairing, chat and the shared queue remain on disk.
+        coupleSpace.onBackground()
+        super.onStop()
     }
 
     private fun requestNotificationPermissionIfNeeded() {
@@ -205,11 +235,27 @@ fun SuzieeApp(
     var showVoiceModal by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var trackForPlaylistDialog by remember { mutableStateOf<Track?>(null) }
+    var coupleImmersive by remember { mutableStateOf(false) }
 
     val playbackState by playerManager.playbackState.collectAsState()
     val voiceState by voiceRecognizer.voiceState.collectAsState()
     val playlists by playerManager.repository.getPlaylists().collectAsState(initial = emptyList())
+    val incomingCoupleCode by app.coupleSpace.incomingCode.collectAsState()
     val scope = rememberCoroutineScope()
+
+    // A pairing / connection deep link is an explicit intent to enter Couple Space, even if
+    // the user was on Home or the intro. The controller keeps the code until the screen
+    // consumes it, so this survives a cold start as well as a warm onNewIntent.
+    LaunchedEffect(incomingCoupleCode?.code) {
+        if (incomingCoupleCode != null) {
+            showLanding = false
+            showSettingsScreen = false
+            currentDestination = MainDestination.COUPLE
+        }
+    }
+    LaunchedEffect(currentDestination) {
+        if (currentDestination != MainDestination.COUPLE) coupleImmersive = false
+    }
 
     if (showLanding) {
         LandingScreen(
@@ -260,6 +306,9 @@ fun SuzieeApp(
             // behind the clock; the Scaffold must not add a second, opaque inset layer.
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
+                // Couple sub-screens are immersive: the mini player and the tab bar step out
+                // of the way so chat and the shared queue can use the full height.
+                if (!(currentDestination == MainDestination.COUPLE && coupleImmersive)) {
                 Column(
                     modifier = Modifier
                         .background(SuzieeTheme.colors.bgSecondary)
@@ -317,6 +366,7 @@ fun SuzieeApp(
                         }
                     }
                 }
+                }
             }
         ) { innerPadding ->
             Box(
@@ -364,6 +414,18 @@ fun SuzieeApp(
                             playerManager = playerManager,
                             downloadManager = downloadManager,
                             onNavigateToSearch = { currentDestination = MainDestination.SEARCH }
+                        )
+                    }
+                    MainDestination.COUPLE -> {
+                        CoupleSpaceScreen(
+                            controller = app.coupleSpace,
+                            playerManager = playerManager,
+                            onImmersiveChange = { coupleImmersive = it },
+                            modifier = if (coupleImmersive) {
+                                Modifier.navigationBarsPadding()
+                            } else {
+                                Modifier
+                            }
                         )
                     }
                 }

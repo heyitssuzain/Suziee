@@ -11,6 +11,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
@@ -260,6 +261,26 @@ class MusicPlayerManager(
     /** Mirrors the user's "Autoplay Next Track" preference (defaults to on). */
     private var autoplayEnabled = true
 
+    // -----------------------------------------------------------------------------------------
+    // Couple Space seam
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * Optional listener installed by Couple Space. It is null for users who never pair, so
+     * the existing player keeps its original zero-overhead path.
+     */
+    var playbackSyncSink: PlaybackSyncSink? = null
+
+    /** True while a remote command is being applied; suppresses the echo-back event. */
+    private var applyingRemote = false
+
+    /** A short tail guard for asynchronous ExoPlayer callbacks. */
+    private var suppressSyncUntil = 0L
+
+    /** Applied once the remote track is actually ready, not while it is still resolving. */
+    private var pendingRemoteSeekMs: Long = -1L
+    private var pendingRemotePlayWhenReady: Boolean? = null
+
     init {
         // Track the autoplay preference so `handlePlaybackEnded` can honour it. Read once
         // here and kept up to date by the collector; cheap and never blocks the UI.
@@ -317,6 +338,18 @@ class MusicPlayerManager(
                                 durationMs = duration,
                                 errorMessage = null
                             )
+                        }
+                        // A remote TRACK command may arrive before the stream is ready.
+                        // Apply its seek/pause intent now, once ExoPlayer can honour it.
+                        val pendingSeek = pendingRemoteSeekMs
+                        if (pendingSeek >= 0L) {
+                            pendingRemoteSeekMs = -1L
+                            runCatching { exoPlayer.seekTo(pendingSeek) }
+                            _playbackState.update { it.copy(currentPositionMs = pendingSeek) }
+                        }
+                        pendingRemotePlayWhenReady?.let { shouldPlay ->
+                            pendingRemotePlayWhenReady = null
+                            runCatching { exoPlayer.playWhenReady = shouldPlay }
                         }
                     }
                     Player.STATE_ENDED -> {
@@ -438,6 +471,8 @@ class MusicPlayerManager(
     }
 
     fun playTrack(track: Track, newQueue: List<Track> = listOf(track)) {
+        pendingRemoteSeekMs = -1L
+        pendingRemotePlayWhenReady = null
         val selection = PlaybackQueue.select(
             track = track,
             requested = newQueue,
@@ -461,6 +496,13 @@ class MusicPlayerManager(
         }
 
         resolveAndStartPlayback(track)
+        emitSync(
+            type = PlaybackSyncEventType.TRACK,
+            track = track,
+            queue = selection.queue,
+            positionMs = 0L,
+            playing = true
+        )
         // Warm Coil's cache for the next song so the art is already decoded when it starts.
         preloadArtworkFor(selection.currentIndex + 1)
     }
@@ -680,6 +722,7 @@ class MusicPlayerManager(
     }
 
     fun togglePlayPause() {
+        val willPlay = !exoPlayer.isPlaying
         try {
             if (exoPlayer.isPlaying) {
                 exoPlayer.pause()
@@ -696,6 +739,13 @@ class MusicPlayerManager(
                 }
                 exoPlayer.playWhenReady = true
             }
+            emitSync(
+                type = if (willPlay) PlaybackSyncEventType.PLAY else PlaybackSyncEventType.PAUSE,
+                track = _playbackState.value.currentTrack,
+                queue = _playbackState.value.queue,
+                positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+                playing = willPlay
+            )
         } catch (e: Exception) {
             Log.e(TAG, "togglePlayPause failed: ${e.message}", e)
         }
@@ -742,6 +792,13 @@ class MusicPlayerManager(
         val track = _playbackState.value.queue.getOrNull(index) ?: return
         _playbackState.update { it.copy(currentIndex = index, currentTrack = track) }
         resolveAndStartPlayback(track)
+        emitSync(
+            type = PlaybackSyncEventType.TRACK,
+            track = track,
+            queue = _playbackState.value.queue,
+            positionMs = 0L,
+            playing = true
+        )
         preloadArtworkFor(index + 1)
     }
 
@@ -784,6 +841,13 @@ class MusicPlayerManager(
             updatedQueue
         }
         _playbackState.update { it.copy(queue = updatedQueue) }
+        emitSync(
+            type = PlaybackSyncEventType.QUEUE,
+            track = _playbackState.value.currentTrack,
+            queue = updatedQueue,
+            positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+            playing = exoPlayer.isPlaying
+        )
         Log.i(
             TAG,
             "Queued '${track.title}' next after '${state.currentTrack.title}' " +
@@ -797,6 +861,14 @@ class MusicPlayerManager(
         // Standard behaviour: more than 3s into the song restarts it instead of skipping back.
         if (exoPlayer.currentPosition > 3000L) {
             exoPlayer.seekTo(0)
+            _playbackState.update { it.copy(currentPositionMs = 0L) }
+            emitSync(
+                type = PlaybackSyncEventType.SEEK,
+                track = state.currentTrack,
+                queue = state.queue,
+                positionMs = 0L,
+                playing = exoPlayer.isPlaying
+            )
             return
         }
         val prevIndex = PlaybackQueue.previousIndex(state.currentIndex, state.queue.size)
@@ -813,6 +885,13 @@ class MusicPlayerManager(
         }
         exoPlayer.seekTo(positionMs)
         _playbackState.update { it.copy(currentPositionMs = positionMs) }
+        emitSync(
+            type = PlaybackSyncEventType.SEEK,
+            track = _playbackState.value.currentTrack,
+            queue = _playbackState.value.queue,
+            positionMs = positionMs,
+            playing = exoPlayer.isPlaying
+        )
     }
 
     fun toggleShuffle() {
@@ -835,6 +914,13 @@ class MusicPlayerManager(
                 currentIndex = newIndex.coerceAtLeast(0)
             )
         }
+        emitSync(
+            type = PlaybackSyncEventType.QUEUE,
+            track = currentTrack,
+            queue = newQueue,
+            positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+            playing = exoPlayer.isPlaying
+        )
     }
 
     fun toggleRepeat() {
@@ -859,6 +945,13 @@ class MusicPlayerManager(
             val updated = currentQueue + track
             originalQueue = originalQueue + track
             _playbackState.update { it.copy(queue = updated) }
+            emitSync(
+                type = PlaybackSyncEventType.QUEUE,
+                track = _playbackState.value.currentTrack,
+                queue = updated,
+                positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+                playing = exoPlayer.isPlaying
+            )
         }
     }
 
@@ -880,6 +973,13 @@ class MusicPlayerManager(
             else -> state.currentIndex
         }
         _playbackState.update { it.copy(queue = currentQueue, currentIndex = newIndex) }
+        emitSync(
+            type = PlaybackSyncEventType.QUEUE,
+            track = _playbackState.value.currentTrack,
+            queue = currentQueue,
+            positionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+            playing = exoPlayer.isPlaying
+        )
     }
 
     fun clearQueue() {
@@ -899,6 +999,115 @@ class MusicPlayerManager(
                 durationMs = 0L
             )
         }
+        emitSync(
+            type = PlaybackSyncEventType.QUEUE,
+            track = null,
+            queue = emptyList(),
+            positionMs = 0L,
+            playing = false
+        )
+    }
+
+    /**
+     * Applies a command received from the paired device.
+     *
+     * This is the only entry point the Couple Space networking layer has into the player.
+     * The [applyingRemote] guard and the short suppression window prevent the resulting
+     * callbacks from being re-broadcast as new local commands, which is what would otherwise
+     * create an infinite play/pause or seek echo between the two phones.
+     */
+    fun applyRemotePlayback(command: RemotePlaybackCommand) {
+        applyingRemote = true
+        try {
+            when (command.action) {
+                RemotePlaybackAction.TRACK -> {
+                    val remoteTrack = command.track ?: return
+                    val queue = command.queue.ifEmpty { listOf(remoteTrack) }
+                    val sameTrack = _playbackState.value.currentTrack?.id == remoteTrack.id
+                    if (!sameTrack) {
+                        playTrack(remoteTrack, queue)
+                    } else {
+                        _playbackState.update { it.copy(queue = queue) }
+                    }
+
+                    val targetPosition = command.positionMs.coerceAtLeast(0L)
+                    pendingRemoteSeekMs = targetPosition
+                    pendingRemotePlayWhenReady = command.playing
+                    if (exoPlayer.playbackState == Player.STATE_READY) {
+                        pendingRemoteSeekMs = -1L
+                        exoPlayer.seekTo(targetPosition)
+                        _playbackState.update { it.copy(currentPositionMs = targetPosition) }
+                        exoPlayer.playWhenReady = command.playing
+                        pendingRemotePlayWhenReady = null
+                    }
+                    if (command.speed in 0.5f..2.0f) {
+                        exoPlayer.setPlaybackParameters(PlaybackParameters(command.speed))
+                    }
+                }
+
+                RemotePlaybackAction.PLAY, RemotePlaybackAction.RESUME -> {
+                    if (exoPlayer.playbackState == Player.STATE_IDLE && exoPlayer.mediaItemCount > 0) {
+                        exoPlayer.prepare()
+                    }
+                    exoPlayer.playWhenReady = true
+                }
+
+                RemotePlaybackAction.PAUSE -> exoPlayer.pause()
+
+                RemotePlaybackAction.SEEK -> {
+                    val position = command.positionMs.coerceAtLeast(0L)
+                    exoPlayer.seekTo(position)
+                    _playbackState.update { it.copy(currentPositionMs = position) }
+                }
+
+                RemotePlaybackAction.NEXT -> playNext()
+                RemotePlaybackAction.PREVIOUS -> playPrevious()
+                RemotePlaybackAction.RATE -> {
+                    if (command.speed in 0.5f..2.0f) {
+                        exoPlayer.setPlaybackParameters(PlaybackParameters(command.speed))
+                    }
+                }
+
+                RemotePlaybackAction.QUEUE -> {
+                    if (command.queue.isNotEmpty()) {
+                        _playbackState.update { it.copy(queue = command.queue) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Remote playback apply failed: ${e.message}")
+        } finally {
+            applyingRemote = false
+            suppressSyncUntil = SystemClock.elapsedRealtime() + REMOTE_SYNC_SUPPRESS_MS
+        }
+    }
+
+    /**
+     * Emits an intent-level event only for real local user actions. Progress ticks are
+     * deliberately not emitted; Couple Space derives live position from the clock instead of
+     * flooding the DataChannel.
+     */
+    private fun emitSync(
+        type: PlaybackSyncEventType,
+        track: Track?,
+        queue: List<Track>,
+        positionMs: Long,
+        playing: Boolean
+    ) {
+        if (applyingRemote) return
+        if (SystemClock.elapsedRealtime() < suppressSyncUntil) return
+        val sink = playbackSyncSink ?: return
+        val event = PlaybackSyncEvent(
+            type = type,
+            track = track,
+            queue = queue,
+            positionMs = positionMs.coerceAtLeast(0L),
+            isPlaying = playing,
+            speed = runCatching { exoPlayer.playbackParameters.speed }.getOrDefault(1f),
+            issuedAt = System.currentTimeMillis()
+        )
+        runCatching { sink.onLocalPlaybackEvent(event) }
+            .onFailure { Log.w(TAG, "Playback sync sink failed: ${it.message}") }
     }
 
     private fun handlePlaybackEnded() {
@@ -1011,6 +1220,7 @@ class MusicPlayerManager(
     }
 
     fun release() {
+        playbackSyncSink = null
         stopProgressTracker()
         visualizerManager.detach()
         equalizerManager.release()
@@ -1031,5 +1241,8 @@ class MusicPlayerManager(
 
         /** Small delay before re-resolving a failed stream, to avoid hammering the API. */
         private const val RECOVERY_BACKOFF_MS = 350L
+
+        /** Tail guard so asynchronous ExoPlayer callbacks cannot echo a remote command. */
+        private const val REMOTE_SYNC_SUPPRESS_MS = 900L
     }
 }
