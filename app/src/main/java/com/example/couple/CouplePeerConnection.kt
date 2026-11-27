@@ -61,19 +61,6 @@ class CouplePeerConnection(
 
     private val peerConnection: PeerConnection
 
-    init {
-        val configuration = PeerConnection.RTCConfiguration(iceServers()).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
-            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
-            iceTransportsType = PeerConnection.IceTransportsType.ALL
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
-            enableImplicitRollback = true
-        }
-        peerConnection = factory.createPeerConnection(configuration, observer)
-            ?: throw IllegalStateException("WebRTC could not create a peer connection")
-    }
-
     // ------------------------------------------------------------------------------------
     // Offer / answer
     // ------------------------------------------------------------------------------------
@@ -341,6 +328,19 @@ class CouplePeerConnection(
         }
 
         override fun onRenegotiationNeeded() = Unit
+    }
+
+    init {
+        val configuration = PeerConnection.RTCConfiguration(iceServers()).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+            rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+            iceTransportsType = PeerConnection.IceTransportsType.ALL
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+            enableImplicitRollback = true
+        }
+        peerConnection = factory.createPeerConnection(configuration, observer)
+            ?: throw IllegalStateException("WebRTC could not create a peer connection")
     }
 
     companion object {

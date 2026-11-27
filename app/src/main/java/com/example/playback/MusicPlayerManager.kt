@@ -1045,7 +1045,7 @@ class MusicPlayerManager(
                     }
                 }
 
-                RemotePlaybackAction.PLAY, RemotePlaybackAction.RESUME -> {
+                RemotePlaybackAction.PLAY -> {
                     if (exoPlayer.playbackState == Player.STATE_IDLE && exoPlayer.mediaItemCount > 0) {
                         exoPlayer.prepare()
                     }

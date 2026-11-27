@@ -216,7 +216,8 @@ data class ClockPayload(
 // ---------------------------------------------------------------------------------------------
 
 object CoupleJson {
-    private val moshi: Moshi = Moshi.Builder()
+    @PublishedApi
+    internal val moshi: Moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
 

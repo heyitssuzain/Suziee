@@ -108,8 +108,8 @@ class CoupleLanSignaling {
             while (System.currentTimeMillis() < deadline) {
                 val buffer = ByteArray(MAX_DISCOVERY_BYTES)
                 val packet = DatagramPacket(buffer, buffer.size)
-                val received = runCatching { udp.receive(packet) }.getOrNull() ?: continue
-                if (received.length <= 0 || received.length > MAX_DISCOVERY_BYTES) continue
+                if (runCatching { udp.receive(packet) }.isFailure) continue
+                if (packet.length <= 0 || packet.length > MAX_DISCOVERY_BYTES) continue
                 val text = String(packet.data, 0, packet.length, Charsets.UTF_8)
                 val discovery = parseDiscovery(text) ?: continue
                 if (discovery.role != ROLE_OFFER) continue

@@ -1484,11 +1484,13 @@ class CoupleSpaceController(
     private fun onFrame(channel: CoupleChannel, raw: String) {
         val peer = activePeerEntity ?: return
         val validation = CoupleValidator.validate(raw, peer.peerId, now())
-        if (validation is CoupleValidation.Invalid) {
-            Log.w(TAG, "Rejected ${channel.wireName} frame: ${validation.reason}")
-            return
+        val envelope = when (validation) {
+            is CoupleValidation.Valid -> validation.envelope
+            is CoupleValidation.Invalid -> {
+                Log.w(TAG, "Rejected ${channel.wireName} frame: ${validation.reason}")
+                return
+            }
         }
-        val envelope = validation.envelope
 
         if (envelope.type in CoupleProtocol.sessionBoundTypes) {
             if (envelope.session != sessionId) return
